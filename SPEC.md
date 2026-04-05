@@ -580,10 +580,12 @@ class Config:
 ## 11. CLI
 
 ```
-python -m termiclaw run "fix the failing test in test_auth.py"
-python -m termiclaw run --task task.txt
-python -m termiclaw run --task task.txt --max-turns 50
-python -m termiclaw attach <run-id>
+termiclaw run "fix the failing test in test_auth.py"
+termiclaw run --task task.txt --max-turns 50 --keep-session --verbose
+termiclaw attach <run-id>
+termiclaw list [--runs-dir DIR]
+termiclaw show <run-id> [--runs-dir DIR]
+termiclaw status
 ```
 
 ### `run`
@@ -598,7 +600,19 @@ python -m termiclaw attach <run-id>
 
 ### `attach`
 
-Alias for `tmux attach -t termiclaw-{run_id_short}`.
+Prefix-matches run ID against active tmux sessions, attaches if unique match.
+
+### `list`
+
+Table of all runs: ID, status, steps, prompt chars, duration, instruction.
+
+### `show`
+
+Prints run metadata and step-by-step trajectory with commands and errors.
+
+### `status`
+
+Checks Claude Code quota via `claude -p`.
 
 ---
 
@@ -625,21 +639,23 @@ No hard cap on consecutive parse failures. The loop continues until `max_turns` 
 ```
 termiclaw/
   __init__.py       # package marker
-  __main__.py       # python -m termiclaw entry point
-  cli.py            # argparse, run/attach commands
+  cli.py            # argparse: run, attach, list, show, status
   agent.py          # main observe-decide-act loop
   planner.py        # claude -p invocation, response parsing, auto-fix
   tmux.py           # tmux subprocess wrapper (provision, send, capture)
-  models.py         # dataclasses (Config, RunState, ParseResult, etc.)
+  models.py         # dataclasses (Config, RunState, RunInfo, ParseResult, etc.)
   summarizer.py     # three-subagent summarization pipeline
-  trajectory.py     # JSONL step logging, run metadata
+  trajectory.py     # JSONL logging, run listing, trajectory reading
   logging.py        # JSON-lines structured logger
+scripts/
+  check-branch.sh   # pre-commit: block main, require rebase
 tests/
-  unit/             # domain logic, parsing, truncation
+  unit/             # domain logic, parsing, truncation, CLI
   integration/      # tmux operations against real tmux
 ```
 
 Zero runtime dependencies. Python 3.13+ stdlib only.
+Entry point: `termiclaw = "termiclaw.cli:main"` via `pyproject.toml`.
 
 ---
 
@@ -672,7 +688,7 @@ Zero runtime dependencies. Python 3.13+ stdlib only.
 
 * `pytest` with `pytest-cov`
 * Testing pyramid: unit > integration > end-to-end
-* Coverage > 90% enforced in CI and `pytest` config
+* Coverage > 84% enforced in CI
 * Branch coverage enabled
 * Unit tests: domain logic, parsing, truncation, policies (no subprocess, no tmux)
 * Integration tests: tmux operations against real tmux
