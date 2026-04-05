@@ -4,8 +4,11 @@ import json
 
 from termiclaw.models import ParsedCommand, RunState, StepRecord
 from termiclaw.trajectory import (
+    _format_duration,
+    _sum_prompt_chars,
     append_step,
     ensure_run_dir,
+    list_runs,
     read_trajectory_text,
     write_run_metadata,
 )
@@ -168,3 +171,71 @@ def test_read_trajectory_text_respects_max_chars(tmp_path):
         append_step(tmp_path, step)
     text = read_trajectory_text(tmp_path, max_chars=1000)
     assert len(text) <= 1200  # some slack for last entry
+
+
+def test_list_runs_empty_dir(tmp_path):
+    assert list_runs(str(tmp_path)) == []
+
+
+def test_list_runs_nonexistent():
+    assert list_runs("/nonexistent/path") == []
+
+
+def test_list_runs_with_data(tmp_path):
+    for rid in ("aaa", "bbb"):
+        run_dir = tmp_path / rid
+        run_dir.mkdir()
+        (run_dir / "run.json").write_text(
+            json.dumps(
+                {
+                    "run_id": rid,
+                    "instruction": f"task {rid}",
+                    "status": "succeeded",
+                    "total_steps": 2,
+                    "started_at": f"2026-04-05T00:0{rid[0]}:00Z",
+                    "finished_at": f"2026-04-05T00:0{rid[0]}:30Z",
+                    "tmux_session": f"t-{rid}",
+                    "termination_reason": "done",
+                }
+            )
+        )
+    results = list_runs(str(tmp_path))
+    assert len(results) == 2
+    assert results[0].run_id in ("aaa", "bbb")
+
+
+def test_sum_prompt_chars(tmp_path):
+    step = StepRecord(
+        step_id="s1",
+        timestamp="t",
+        source="agent",
+        observation="out",
+        metrics=(("prompt_chars", 1500),),
+    )
+    append_step(tmp_path, step)
+    step2 = StepRecord(
+        step_id="s2",
+        timestamp="t",
+        source="agent",
+        observation="out",
+        metrics=(("prompt_chars", 2500),),
+    )
+    append_step(tmp_path, step2)
+    assert _sum_prompt_chars(tmp_path) == 4000
+
+
+def test_format_duration_seconds():
+    assert _format_duration("2026-04-05T00:00:00Z", "2026-04-05T00:00:30Z") == "30s"
+
+
+def test_format_duration_minutes():
+    assert _format_duration("2026-04-05T00:00:00Z", "2026-04-05T00:02:15Z") == "2m 15s"
+
+
+def test_format_duration_hours():
+    assert _format_duration("2026-04-05T00:00:00Z", "2026-04-05T01:30:00Z") == "1h 30m"
+
+
+def test_format_duration_missing():
+    assert _format_duration("", "") == "-"
+    assert _format_duration("2026-04-05T00:00:00Z", "") == "-"

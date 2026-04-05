@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 from pathlib import Path
 
-from termiclaw import agent, tmux
+from termiclaw import agent, tmux, trajectory
 from termiclaw.models import Config
 
 
@@ -30,6 +31,15 @@ def main() -> None:
     attach_parser = sub.add_parser("attach", help="Attach to a running tmux session")
     attach_parser.add_argument("run_id", help="Run ID (or prefix)")
 
+    list_parser = sub.add_parser("list", help="List all runs")
+    list_parser.add_argument("--runs-dir", default="./termiclaw_runs")
+
+    show_parser = sub.add_parser("show", help="Show run trajectory")
+    show_parser.add_argument("run_id", help="Run ID (or prefix)")
+    show_parser.add_argument("--runs-dir", default="./termiclaw_runs")
+
+    sub.add_parser("status", help="Check Claude Code quota")
+
     args = parser.parse_args()
 
     if args.command is None:
@@ -40,6 +50,12 @@ def main() -> None:
         _run(args)
     elif args.command == "attach":
         _attach(args)
+    elif args.command == "list":
+        _list_runs(args)
+    elif args.command == "show":
+        _show(args)
+    elif args.command == "status":
+        _status()
 
 
 def _run(args: argparse.Namespace) -> None:
@@ -112,6 +128,110 @@ def _check_tmux() -> None:
             "  macOS: brew install tmux\n"
             "  Ubuntu: sudo apt install tmux\n",
         )
+        sys.exit(1)
+
+
+def _list_runs(args: argparse.Namespace) -> None:
+    """List all runs."""
+    runs = trajectory.list_runs(args.runs_dir)
+    if not runs:
+        sys.stderr.write("No runs found.\n")
+        return
+    max_instr = 60
+    sys.stderr.write(
+        f"{'ID':<10} {'STATUS':<10} {'STEPS':>5} {'CHARS':>8} {'DURATION':>10}  INSTRUCTION\n",
+    )
+    sys.stderr.write("-" * 100 + "\n")
+    for r in runs:
+        instruction = r.instruction.replace("\n", " ")
+        if len(instruction) > max_instr:
+            instruction = instruction[: max_instr - 3] + "..."
+        sys.stderr.write(
+            f"{r.run_id[:8]:<10} {r.status:<10} {r.total_steps:>5} "
+            f"{r.prompt_chars:>8,} {r.duration:>10}  {instruction}\n",
+        )
+
+
+def _show(args: argparse.Namespace) -> None:
+    """Show a run's trajectory."""
+    run_dir = _resolve_run_dir(Path(args.runs_dir), args.run_id)
+    _print_run_header(run_dir)
+    _print_trajectory(run_dir)
+
+
+def _resolve_run_dir(runs_path: Path, prefix: str) -> Path:
+    """Find a unique run directory matching a prefix."""
+    if not runs_path.exists():
+        sys.stderr.write("No runs found.\n")
+        sys.exit(1)
+    matches = [d for d in runs_path.iterdir() if d.is_dir() and d.name.startswith(prefix)]
+    if not matches:
+        sys.stderr.write(f"No run found matching '{prefix}'\n")
+        sys.exit(1)
+    if len(matches) > 1:
+        sys.stderr.write(f"Ambiguous: {', '.join(d.name for d in matches)}\n")
+        sys.exit(1)
+    return matches[0]
+
+
+def _print_run_header(run_dir: Path) -> None:
+    """Print run metadata header."""
+    run_json = run_dir / "run.json"
+    if not run_json.exists():
+        return
+    meta = json.loads(run_json.read_text(encoding="utf-8"))
+    for key in ("run_id", "status", "instruction", "total_steps", "started_at", "finished_at"):
+        sys.stderr.write(f"{key}: {meta.get(key, '?')}\n")
+    sys.stderr.write("\n")
+
+
+def _print_trajectory(run_dir: Path) -> None:
+    """Print trajectory steps."""
+    traj = run_dir / "trajectory.jsonl"
+    if not traj.exists():
+        sys.stderr.write("No trajectory found.\n")
+        return
+    for i, line in enumerate(traj.read_text(encoding="utf-8").strip().splitlines(), 1):
+        try:
+            step = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        source = step.get("source", "?")
+        message = step.get("message", "")
+        error = step.get("error")
+        sys.stderr.write(f"--- Step {i} [{source}] ---\n")
+        if message:
+            sys.stderr.write(f"  {message}\n")
+        for tc in step.get("tool_calls", []):
+            fn = tc.get("function_name", "?")
+            ks = tc.get("arguments", {}).get("keystrokes", "")
+            sys.stderr.write(f"  > {fn}: {ks!r}\n" if ks else f"  > {fn}\n")
+        if error:
+            sys.stderr.write(f"  ERROR: {error}\n")
+        sys.stderr.write("\n")
+
+
+def _status() -> None:
+    """Check Claude Code quota status."""
+    try:
+        result = subprocess.run(
+            ["claude", "-p", "--output-format", "json", "What is your current usage status?"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if result.returncode == 0:
+            sys.stderr.write(result.stdout + "\n")
+        else:
+            sys.stderr.write(f"claude -p failed (exit {result.returncode})\n")
+            if result.stderr:
+                sys.stderr.write(result.stderr + "\n")
+    except FileNotFoundError:
+        sys.stderr.write("Error: Claude Code not found.\n")
+        sys.exit(1)
+    except subprocess.TimeoutExpired:
+        sys.stderr.write("Error: Claude Code timed out.\n")
         sys.exit(1)
 
 
