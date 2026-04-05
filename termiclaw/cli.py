@@ -4,16 +4,23 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
+from importlib.metadata import version
 from pathlib import Path
 
 from termiclaw import agent, tmux, trajectory
 from termiclaw.models import Config
 
+_REPO_URL = "https://github.com/e6qu/termiclaw.git"
+_TAG_PATTERN = re.compile(r"refs/tags/termiclaw-v(\d+\.\d+\.\d+)$")
+
 
 def main() -> None:
     """Entry point for the termiclaw CLI."""
+    update_check = _start_update_check()
+
     parser = argparse.ArgumentParser(
         prog="termiclaw",
         description="Terminus-style terminal agent",
@@ -44,6 +51,7 @@ def main() -> None:
 
     if args.command is None:
         parser.print_help()
+        _finish_update_check(update_check)
         sys.exit(1)
 
     if args.command == "run":
@@ -56,6 +64,8 @@ def main() -> None:
         _show(args)
     elif args.command == "status":
         _status()
+
+    _finish_update_check(update_check)
 
 
 def _run(args: argparse.Namespace) -> None:
@@ -233,6 +243,71 @@ def _status() -> None:
     except subprocess.TimeoutExpired:
         sys.stderr.write("Error: Claude Code timed out.\n")
         sys.exit(1)
+
+
+def _start_update_check() -> subprocess.Popen[bytes] | None:
+    """Start a background git ls-remote to check for newer versions."""
+    try:
+        return subprocess.Popen(
+            ["git", "ls-remote", "--tags", _REPO_URL],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+    except FileNotFoundError:
+        return None
+
+
+def _finish_update_check(proc: subprocess.Popen[bytes] | None) -> None:
+    """Check the result of the background version check. Never blocks."""
+    if proc is None:
+        return
+    if proc.poll() is None:
+        return  # still running, skip — don't delay exit
+    stdout = proc.stdout.read() if proc.stdout else b""
+    if proc.returncode != 0:
+        return
+    local_version = _get_local_version()
+    if not local_version:
+        return
+    remote_version = _parse_latest_tag(stdout.decode("utf-8", errors="replace"))
+    if not remote_version:
+        return
+    if _version_tuple(remote_version) > _version_tuple(local_version):
+        sys.stderr.write(
+            f"\nUpdate available: {local_version} -> {remote_version}\n"
+            f"Run: uv tool upgrade termiclaw\n",
+        )
+
+
+def _get_local_version() -> str:
+    """Get the installed version of termiclaw."""
+    try:
+        return version("termiclaw")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _parse_latest_tag(ls_remote_output: str) -> str:
+    """Extract the highest version from git ls-remote --tags output."""
+    best = ""
+    for line in ls_remote_output.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 2:  # noqa: PLR2004
+            continue
+        match = _TAG_PATTERN.search(parts[1])
+        if match:
+            candidate = match.group(1)
+            if not best or _version_tuple(candidate) > _version_tuple(best):
+                best = candidate
+    return best
+
+
+def _version_tuple(ver: str) -> tuple[int, ...]:
+    """Convert '1.2.3' to (1, 2, 3) for comparison."""
+    try:
+        return tuple(int(x) for x in ver.split("."))
+    except ValueError:
+        return (0,)
 
 
 def _check_claude() -> None:
