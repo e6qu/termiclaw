@@ -30,6 +30,8 @@ Installed automatically by `pre-commit install`:
 | pre-commit | ty-check | Type checking |
 | commit-msg | conventional-pre-commit | Conventional commit format |
 | pre-push | pytest-unit | Unit tests with coverage |
+| pre-push | pytest-integration | Integration tests (requires tmux) |
+| pre-push | update-loc-badges | Updates code/test LOC badges in README |
 
 ## Running tests
 
