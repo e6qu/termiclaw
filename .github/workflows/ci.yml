@@ -6,6 +6,19 @@ on:
   pull_request:
 
 jobs:
+  commitlint:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Check conventional commits
+        uses: webiny/action-conventional-commits@v1.3.0
+        with:
+          allowed-commit-types: "feat,fix,docs,chore,refactor,test,ci,perf,build,style"
+
   lint:
     runs-on: ubuntu-latest
     steps:
