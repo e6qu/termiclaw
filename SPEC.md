@@ -820,6 +820,18 @@ Key design decisions relevant to Termiclaw:
 - **Scaffolding matters** — the same model scores 2-6 points differently depending on the agent wrapping it. Agent architecture (prompt engineering, summarization, error recovery) is measurable.
 - **ATIF trajectories** — Terminal-Bench uses the [Agent Trajectory Interchange Format](https://github.com/laude-institute/harbor/blob/main/docs/rfcs/0001-trajectory-format.md) for logging. Termiclaw already writes ATIF-compatible JSONL.
 
+Leaderboard scores (Terminal-Bench 2.0, March 2026):
+
+| Agent | Score |
+|-------|-------|
+| Forge Code + Gemini 3.1 Pro | 78.4% |
+| Factory Droid + GPT-5.3-Codex | 77.3% |
+| KRAFTON Terminus-KIRA + Claude Opus 4.6 | 74.7% |
+| Claude Code (as shipped) | 65.4% |
+| Terminus-2 + Claude Sonnet 4.6 | 59.6% |
+
+The 15-point gap between Claude Opus 4.6 on neutral Terminus-2 (~59%) vs KRAFTON's agent (74.7%) demonstrates that agent engineering is a massive lever.
+
 Source: [tbench.ai/leaderboard/terminal-bench/2.0](https://www.tbench.ai/leaderboard/terminal-bench/2.0), [arxiv 2601.11868](https://arxiv.org/html/2601.11868v1)
 
 ### 20.2 Karpathy's AutoResearch
@@ -873,7 +885,11 @@ Concrete strategies for Termiclaw:
 
 **Iterative refinement loop.** The autoresearch pattern: modify prompt/architecture → run evals → keep improvements → repeat. This is systematic, not ad-hoc.
 
-Source: [Anthropic evals guide](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents), [LangChain trajectory evals](https://docs.langchain.com/langsmith/trajectory-evals)
+The arXiv paper "Evaluation-Driven Development of LLM Agents" ([2411.13768](https://arxiv.org/html/2411.13768v3)) formalizes this as **EDD**: "For LLM agents, evaluation results must inform a broader range of adaptive changes, including architectural refinements, pipeline adjustments, and updates to test suites."
+
+> "Teams without evals get stuck in reactive loops — catching issues only in production, where fixing one failure creates others." — [Anthropic](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents)
+
+Source: [Anthropic evals guide](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents), [EDD paper](https://arxiv.org/html/2411.13768v3), [LangChain trajectory evals](https://docs.langchain.com/langsmith/trajectory-evals)
 
 ### 20.5 Roadmap for Termiclaw evals
 
