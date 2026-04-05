@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/e6qu/termiclaw/compare/termiclaw-v0.6.1...termiclaw-v0.7.0) (2026-04-05)
+
+
+### Features
+
+* add LOC badges, shellcheck, and pre-push hooks ([#21](https://github.com/e6qu/termiclaw/issues/21)) ([414e40d](https://github.com/e6qu/termiclaw/commit/414e40d68c56de2cb6e367fbe10e290f4c3debc6))
+
 ## [0.6.1](https://github.com/e6qu/termiclaw/compare/termiclaw-v0.6.0...termiclaw-v0.6.1) (2026-04-05)
 
 
