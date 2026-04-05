@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/e6qu/termiclaw/compare/termiclaw-v0.5.0...termiclaw-v0.6.0) (2026-04-05)
+
+
+### Features
+
+* write structured JSONL logs to platform log directory ([#17](https://github.com/e6qu/termiclaw/issues/17)) ([7785c1a](https://github.com/e6qu/termiclaw/commit/7785c1a4bed7dde0a7a9857589dfd24084ef2536))
+
 ## [0.5.0](https://github.com/e6qu/termiclaw/compare/termiclaw-v0.4.1...termiclaw-v0.5.0) (2026-04-05)
 
 
