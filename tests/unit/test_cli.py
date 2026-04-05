@@ -12,13 +12,18 @@ from termiclaw.cli import (
     _attach,
     _check_claude,
     _check_tmux,
+    _finish_update_check,
+    _get_local_version,
     _list_runs,
+    _parse_latest_tag,
     _print_run_header,
     _print_trajectory,
     _resolve_run_dir,
     _run,
     _show,
+    _start_update_check,
     _status,
+    _version_tuple,
 )
 from termiclaw.models import RunInfo
 
@@ -340,3 +345,77 @@ def test_status_timeout():
         pytest.raises(SystemExit),
     ):
         _status()
+
+
+# --- Version check ---
+
+
+def test_version_tuple():
+    assert _version_tuple("1.2.3") == (1, 2, 3)
+    assert _version_tuple("0.4.0") == (0, 4, 0)
+    assert _version_tuple("10.0.1") == (10, 0, 1)
+    assert _version_tuple("bad") == (0,)
+
+
+def test_parse_latest_tag():
+    output = (
+        "abc123\trefs/tags/termiclaw-v0.1.0\n"
+        "def456\trefs/tags/termiclaw-v0.3.0\n"
+        "ghi789\trefs/tags/termiclaw-v0.2.0\n"
+    )
+    assert _parse_latest_tag(output) == "0.3.0"
+
+
+def test_parse_latest_tag_empty():
+    assert _parse_latest_tag("") == ""
+
+
+def test_parse_latest_tag_no_match():
+    assert _parse_latest_tag("abc123\trefs/tags/v1.0.0\n") == ""
+
+
+def test_get_local_version():
+    v = _get_local_version()
+    assert v  # should return something since termiclaw is installed
+
+
+def test_start_update_check():
+    proc = _start_update_check()
+    if proc is not None:
+        proc.kill()
+        proc.wait()
+
+
+def test_finish_update_check_none():
+    _finish_update_check(None)  # should not raise
+
+
+def test_finish_update_check_no_update(capsys):
+    mock_stdout = MagicMock()
+    mock_stdout.read.return_value = b"abc\trefs/tags/termiclaw-v0.0.1\n"
+    mock_proc = MagicMock()
+    mock_proc.poll.return_value = 0
+    mock_proc.returncode = 0
+    mock_proc.stdout = mock_stdout
+    _finish_update_check(mock_proc)
+    captured = capsys.readouterr()
+    assert "Update available" not in captured.err
+
+
+def test_finish_update_check_with_update(capsys):
+    mock_stdout = MagicMock()
+    mock_stdout.read.return_value = b"abc\trefs/tags/termiclaw-v99.0.0\n"
+    mock_proc = MagicMock()
+    mock_proc.poll.return_value = 0
+    mock_proc.returncode = 0
+    mock_proc.stdout = mock_stdout
+    _finish_update_check(mock_proc)
+    captured = capsys.readouterr()
+    assert "Update available" in captured.err
+    assert "99.0.0" in captured.err
+
+
+def test_finish_update_check_still_running():
+    mock_proc = MagicMock()
+    mock_proc.poll.return_value = None  # still running
+    _finish_update_check(mock_proc)  # should return immediately, no block
