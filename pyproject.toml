@@ -1,0 +1,113 @@
+[project]
+name = "termiclaw"
+version = "0.1.0"
+description = "Terminus-style terminal agent using Claude Code and tmux"
+requires-python = ">=3.13"
+license = "AGPL-3.0-or-later"
+authors = [{name = "Adrian Mârza"}]
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/e6qu/termiclaw"
+Issues = "https://github.com/e6qu/termiclaw/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project.scripts]
+termiclaw = "termiclaw.cli:main"
+
+[dependency-groups]
+test = [
+    "pytest>=8.0",
+    "pytest-cov>=6.0",
+]
+lint = [
+    "ruff>=0.11",
+]
+typecheck = [
+    "ty>=0.0.1a0",
+]
+dev = [
+    { include-group = "test" },
+    { include-group = "lint" },
+    { include-group = "typecheck" },
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-m 'not integration'"
+markers = ["integration: requires real tmux"]
+
+[tool.coverage.run]
+source = ["termiclaw"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 84
+show_missing = true
+exclude_lines = [
+    "if __name__ == .__main__.",
+    "pragma: no cover",
+]
+
+[tool.ty]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "A",      # flake8-builtins
+    "ANN",    # flake8-annotations
+    "ARG",    # flake8-unused-arguments
+    "B",      # flake8-bugbear
+    "BLE",    # flake8-blind-except
+    "C4",     # flake8-comprehensions
+    "C90",    # mccabe complexity
+    "DTZ",    # flake8-datetimez
+    "E",      # pycodestyle errors
+    "EM",     # flake8-errmsg
+    "ERA",    # flake8-eradicate
+    "F",      # pyflakes
+    "FBT",    # flake8-boolean-trap
+    "I",      # isort
+    "ICN",    # flake8-import-conventions
+    "ISC",    # flake8-implicit-str-concat
+    "N",      # pep8-naming
+    "PGH",    # pygrep-hooks
+    "PIE",    # flake8-pie
+    "PL",     # pylint
+    "PT",     # flake8-pytest-style
+    "PTH",    # flake8-use-pathlib
+    "RET",    # flake8-return
+    "RSE",    # flake8-raise
+    "RUF",    # ruff-specific
+    "S",      # flake8-bandit (security)
+    "SIM",    # flake8-simplify
+    "SLF",    # flake8-self
+    "T20",    # flake8-print
+    "TCH",    # flake8-type-checking
+    "TID",    # flake8-tidy-imports
+    "TRY",    # tryceratops
+    "UP",     # pyupgrade
+    "W",      # pycodestyle warnings
+    "YTT",    # flake8-2020
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "S101",    # assert allowed in tests
+    "ANN",     # annotations not required in tests
+    "ARG",     # unused args common in fixtures
+    "PLR2004", # magic values in tests are fine
+]
+"termiclaw/planner.py" = ["S603", "S607"]
+"termiclaw/tmux.py" = ["S603", "S607"]
+"termiclaw/cli.py" = ["S603", "S607"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
