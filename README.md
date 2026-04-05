@@ -80,6 +80,10 @@ Every run produces a trajectory log in `./termiclaw_runs/<run-id>/`:
 - `trajectory.jsonl` --- step-by-step ATIF-format log
 - `run.json` --- run metadata (status, timing, termination reason)
 
+Structured JSONL logs are also written to:
+- **macOS**: `~/Library/Logs/termiclaw/<run-id>.jsonl`
+- **Linux**: `~/.local/state/termiclaw/log/<run-id>.jsonl`
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, testing, and PR guidelines.
