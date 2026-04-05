@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/e6qu/termiclaw/compare/termiclaw-v0.4.0...termiclaw-v0.4.1) (2026-04-05)
+
+
+### Documentation
+
+* update and cross-link all documentation ([#13](https://github.com/e6qu/termiclaw/issues/13)) ([8236d68](https://github.com/e6qu/termiclaw/commit/8236d68d858790862c769e6f67ceb476edcb9f18))
+
 ## [0.4.0](https://github.com/e6qu/termiclaw/compare/termiclaw-v0.3.1...termiclaw-v0.4.0) (2026-04-05)
 
 
