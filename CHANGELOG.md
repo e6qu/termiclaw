@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/e6qu/termiclaw/compare/termiclaw-v0.7.0...termiclaw-v0.8.0) (2026-04-05)
+
+
+### Features
+
+* SQLite DB, fix status, evals/autoresearch spec ([#23](https://github.com/e6qu/termiclaw/issues/23)) ([6054c86](https://github.com/e6qu/termiclaw/commit/6054c86b75af7df74c933b01d3f5f4a079e6512c))
+
 ## [0.7.0](https://github.com/e6qu/termiclaw/compare/termiclaw-v0.6.1...termiclaw-v0.7.0) (2026-04-05)
 
 
