@@ -1,18 +1,34 @@
 """Tests for termiclaw.cli."""
 
 import argparse
+import json
 import subprocess
-from unittest.mock import patch
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from termiclaw.cli import _attach, _check_claude, _check_tmux, _run
+from termiclaw.cli import (
+    _attach,
+    _check_claude,
+    _check_tmux,
+    _list_runs,
+    _print_run_header,
+    _print_trajectory,
+    _resolve_run_dir,
+    _run,
+    _show,
+    _status,
+)
+from termiclaw.models import RunInfo
+
+# --- Startup checks ---
 
 
 def test_check_tmux_present():
     with patch("termiclaw.cli.subprocess.run") as mock_run:
         mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0)
-        _check_tmux()  # should not raise
+        _check_tmux()
 
 
 def test_check_tmux_missing():
@@ -26,7 +42,7 @@ def test_check_tmux_missing():
 def test_check_claude_present():
     with patch("termiclaw.cli.subprocess.run") as mock_run:
         mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0)
-        _check_claude()  # should not raise
+        _check_claude()
 
 
 def test_check_claude_missing():
@@ -59,6 +75,9 @@ def test_check_claude_command_fails():
         _check_claude()
 
 
+# --- run ---
+
+
 def test_run_task_file_not_found():
     args = argparse.Namespace(
         instruction=None,
@@ -74,6 +93,51 @@ def test_run_task_file_not_found():
         pytest.raises(SystemExit),
     ):
         _run(args)
+
+
+def test_run_no_instruction():
+    args = argparse.Namespace(
+        instruction=None,
+        task=None,
+        max_turns=10,
+        keep_session=False,
+        runs_dir="./runs",
+        verbose=False,
+    )
+    with (
+        patch("termiclaw.cli._check_tmux"),
+        patch("termiclaw.cli._check_claude"),
+        pytest.raises(SystemExit),
+    ):
+        _run(args)
+
+
+def test_run_with_instruction():
+    args = argparse.Namespace(
+        instruction="do stuff",
+        task=None,
+        max_turns=10,
+        keep_session=False,
+        runs_dir="./runs",
+        verbose=False,
+    )
+    with (
+        patch("termiclaw.cli._check_tmux"),
+        patch("termiclaw.cli._check_claude"),
+        patch("termiclaw.cli.agent") as mock_agent,
+    ):
+        mock_agent.run.return_value = MagicMock(
+            run_id="abc",
+            status="succeeded",
+            current_step=1,
+        )
+        _run(args)
+        mock_agent.run.assert_called_once()
+        config = mock_agent.run.call_args[0][0]
+        assert config.instruction == "do stuff"
+
+
+# --- attach ---
 
 
 def test_attach_session_not_found():
@@ -92,3 +156,187 @@ def test_attach_session_not_found():
         pytest.raises(SystemExit),
     ):
         _attach(args)
+
+
+def test_attach_exact_match():
+    args = argparse.Namespace(run_id="abc12345")
+    with (
+        patch("termiclaw.cli.tmux.is_session_alive", return_value=True),
+        patch("termiclaw.cli.tmux.attach_session") as mock_attach,
+    ):
+        _attach(args)
+        mock_attach.assert_called_once_with("termiclaw-abc12345")
+
+
+# --- list ---
+
+
+def test_list_runs_empty(tmp_path):
+    args = argparse.Namespace(runs_dir=str(tmp_path))
+    _list_runs(args)  # should print "No runs found." to stderr
+
+
+def test_list_runs_with_data(tmp_path):
+    mock_runs = [
+        RunInfo(
+            run_id="abc12345",
+            instruction="fix the bug",
+            status="succeeded",
+            total_steps=3,
+            started_at="2026-04-05T00:00:00Z",
+            finished_at="2026-04-05T00:01:00Z",
+            tmux_session="t",
+            termination_reason="done",
+            prompt_chars=5000,
+            duration="1m 0s",
+        ),
+    ]
+    args = argparse.Namespace(runs_dir=str(tmp_path))
+    with patch("termiclaw.cli.trajectory.list_runs", return_value=mock_runs):
+        _list_runs(args)
+
+
+def test_list_runs_truncates_instruction(tmp_path):
+    long_instruction = "a" * 100
+    mock_runs = [
+        RunInfo(
+            run_id="abc",
+            instruction=long_instruction,
+            status="succeeded",
+            total_steps=1,
+            started_at="t",
+            finished_at="t",
+            tmux_session="t",
+            termination_reason="done",
+            prompt_chars=0,
+            duration="-",
+        ),
+    ]
+    args = argparse.Namespace(runs_dir=str(tmp_path))
+    with patch("termiclaw.cli.trajectory.list_runs", return_value=mock_runs):
+        _list_runs(args)
+
+
+# --- show ---
+
+
+def test_resolve_run_dir_not_found(tmp_path):
+    with pytest.raises(SystemExit):
+        _resolve_run_dir(tmp_path, "nonexistent")
+
+
+def test_resolve_run_dir_found(tmp_path):
+    run_dir = tmp_path / "abc12345"
+    run_dir.mkdir()
+    result = _resolve_run_dir(tmp_path, "abc")
+    assert result == run_dir
+
+
+def test_resolve_run_dir_ambiguous(tmp_path):
+    (tmp_path / "abc111").mkdir()
+    (tmp_path / "abc222").mkdir()
+    with pytest.raises(SystemExit):
+        _resolve_run_dir(tmp_path, "abc")
+
+
+def test_resolve_run_dir_nonexistent_parent():
+    with pytest.raises(SystemExit):
+        _resolve_run_dir(Path("/nonexistent"), "abc")
+
+
+def test_print_run_header(tmp_path):
+    meta = {
+        "run_id": "abc",
+        "status": "succeeded",
+        "instruction": "fix bug",
+        "total_steps": 3,
+        "started_at": "2026-04-05T00:00:00Z",
+        "finished_at": "2026-04-05T00:01:00Z",
+    }
+    (tmp_path / "run.json").write_text(json.dumps(meta))
+    _print_run_header(tmp_path)
+
+
+def test_print_run_header_no_file(tmp_path):
+    _print_run_header(tmp_path)  # should not raise
+
+
+def test_print_trajectory(tmp_path):
+    steps = [
+        {
+            "step_id": "s1",
+            "source": "agent",
+            "message": "checking",
+            "tool_calls": [{"function_name": "bash_command", "arguments": {"keystrokes": "ls\n"}}],
+            "error": None,
+        },
+        {
+            "step_id": "s2",
+            "source": "error",
+            "message": "",
+            "tool_calls": [],
+            "error": "parse failed",
+        },
+    ]
+    traj = tmp_path / "trajectory.jsonl"
+    traj.write_text("\n".join(json.dumps(s) for s in steps) + "\n")
+    _print_trajectory(tmp_path)
+
+
+def test_print_trajectory_no_file(tmp_path):
+    _print_trajectory(tmp_path)  # should print "No trajectory found."
+
+
+def test_show(tmp_path):
+    run_dir = tmp_path / "abc12345"
+    run_dir.mkdir()
+    (run_dir / "run.json").write_text(json.dumps({"run_id": "abc12345", "status": "succeeded"}))
+    (run_dir / "trajectory.jsonl").write_text(
+        json.dumps({"step_id": "s1", "source": "agent", "message": "hi", "tool_calls": []}) + "\n",
+    )
+    args = argparse.Namespace(runs_dir=str(tmp_path), run_id="abc")
+    _show(args)
+
+
+# --- status ---
+
+
+def test_status_success():
+    with patch("termiclaw.cli.subprocess.run") as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout='{"status":"ok"}',
+            stderr="",
+        )
+        _status()
+
+
+def test_status_failure():
+    with patch("termiclaw.cli.subprocess.run") as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout="",
+            stderr="rate limited",
+        )
+        _status()
+
+
+def test_status_not_found():
+    with (
+        patch("termiclaw.cli.subprocess.run", side_effect=FileNotFoundError),
+        pytest.raises(SystemExit),
+    ):
+        _status()
+
+
+def test_status_timeout():
+    with (
+        patch(
+            "termiclaw.cli.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd="claude", timeout=30),
+        ),
+        pytest.raises(SystemExit),
+    ):
+        _status()

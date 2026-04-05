@@ -80,3 +80,19 @@ class Config:
     keep_session: bool = False
     verbose: bool = False
     runs_dir: str = "./termiclaw_runs"
+
+
+@dataclass(frozen=True)
+class RunInfo:
+    """Summary of a completed run for listing."""
+
+    run_id: str
+    instruction: str
+    status: str
+    total_steps: int
+    started_at: str
+    finished_at: str
+    tmux_session: str
+    termination_reason: str
+    prompt_chars: int
+    duration: str

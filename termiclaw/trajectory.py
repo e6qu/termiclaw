@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from termiclaw.models import RunInfo
 
 if TYPE_CHECKING:
     from termiclaw.models import RunState, StepRecord
@@ -120,3 +123,83 @@ def _step_to_dict(step: StepRecord) -> dict[str, object]:
         "is_copied_context": step.is_copied_context,
         "error": step.error,
     }
+
+
+def list_runs(runs_dir: str) -> list[RunInfo]:
+    """List all runs with metadata. Sorted by start time, newest first."""
+    runs_path = Path(runs_dir)
+    if not runs_path.exists():
+        return []
+    results: list[RunInfo] = []
+    for entry in runs_path.iterdir():
+        if not entry.is_dir():
+            continue
+        run_json = entry / "run.json"
+        if not run_json.exists():
+            continue
+        try:
+            meta = json.loads(run_json.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        started = str(meta.get("started_at", ""))
+        finished = str(meta.get("finished_at", ""))
+        info = RunInfo(
+            run_id=str(meta.get("run_id", "")),
+            instruction=str(meta.get("instruction", "")),
+            status=str(meta.get("status", "")),
+            total_steps=int(meta.get("total_steps", 0)),
+            started_at=started,
+            finished_at=finished,
+            tmux_session=str(meta.get("tmux_session", "")),
+            termination_reason=str(meta.get("termination_reason", "")),
+            prompt_chars=_sum_prompt_chars(entry),
+            duration=_format_duration(started, finished),
+        )
+        results.append(info)
+    results.sort(key=lambda r: r.started_at, reverse=True)
+    return results
+
+
+def _sum_prompt_chars(run_dir: Path) -> int:
+    """Sum prompt_chars from all trajectory steps."""
+    trajectory_path = run_dir / "trajectory.jsonl"
+    if not trajectory_path.exists():
+        return 0
+    total = 0
+    for line in trajectory_path.read_text(encoding="utf-8").strip().splitlines():
+        try:
+            entry = json.loads(line)
+            metrics = entry.get("metrics", {})
+            if isinstance(metrics, dict):
+                total += int(metrics.get("prompt_chars", 0))
+        except (json.JSONDecodeError, TypeError, ValueError):
+            continue
+    return total
+
+
+_SECONDS_PER_MINUTE = 60
+_MINUTES_PER_HOUR = 60
+
+
+def _format_duration(started_at: str, finished_at: str) -> str:
+    """Format duration between two ISO timestamps as human-readable string."""
+    if not started_at or not finished_at:
+        return "-"
+    try:
+        start = datetime.fromisoformat(started_at)
+        end = datetime.fromisoformat(finished_at)
+    except ValueError:
+        return "-"
+    delta = end - start
+    total_seconds = int(delta.total_seconds())
+    if total_seconds < 0:
+        return "-"
+    if total_seconds < _SECONDS_PER_MINUTE:
+        return f"{total_seconds}s"
+    minutes = total_seconds // _SECONDS_PER_MINUTE
+    seconds = total_seconds % _SECONDS_PER_MINUTE
+    if minutes < _MINUTES_PER_HOUR:
+        return f"{minutes}m {seconds}s"
+    hours = minutes // _MINUTES_PER_HOUR
+    minutes = minutes % _MINUTES_PER_HOUR
+    return f"{hours}h {minutes}m"

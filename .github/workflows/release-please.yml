@@ -18,3 +18,31 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+      - name: Add installation instructions to release
+        if: steps.release.outputs.release_created == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.release.outputs.tag_name }}
+        run: |
+          EXISTING=$(gh release view "$TAG" --json body -q .body)
+          HEADER=$(cat <<'INSTALL'
+          ## Installation
+
+          ```bash
+          uv tool install git+https://github.com/e6qu/termiclaw.git@$TAG
+          ```
+
+          ## Update
+
+          ```bash
+          uv tool upgrade termiclaw
+          ```
+
+          ---
+
+          INSTALL
+          )
+          # dedent the heredoc
+          HEADER=$(echo "$HEADER" | sed 's/^          //')
+          gh release edit "$TAG" --notes "${HEADER}${EXISTING}"
