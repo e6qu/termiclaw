@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/e6qu/termiclaw/compare/termiclaw-v0.6.0...termiclaw-v0.6.1) (2026-04-05)
+
+
+### Bug Fixes
+
+* version check waits for subprocess with 2s timeout ([#19](https://github.com/e6qu/termiclaw/issues/19)) ([f7f1d5d](https://github.com/e6qu/termiclaw/commit/f7f1d5da32556a663b61ab460158bbf728acbd97))
+
 ## [0.6.0](https://github.com/e6qu/termiclaw/compare/termiclaw-v0.5.0...termiclaw-v0.6.0) (2026-04-05)
 
 
