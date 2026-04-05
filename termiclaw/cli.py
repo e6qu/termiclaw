@@ -45,7 +45,7 @@ def main() -> None:
     show_parser.add_argument("run_id", help="Run ID (or prefix)")
     show_parser.add_argument("--runs-dir", default="./termiclaw_runs")
 
-    sub.add_parser("status", help="Check Claude Code quota")
+    sub.add_parser("status", help="Show auth status and usage summary")
 
     args = parser.parse_args()
 
@@ -222,27 +222,54 @@ def _print_trajectory(run_dir: Path) -> None:
 
 
 def _status() -> None:
-    """Check Claude Code quota status."""
+    """Show Claude Code auth status and local usage summary."""
+    _show_auth_status()
+    _show_usage_summary()
+
+
+def _show_auth_status() -> None:
+    """Print Claude Code authentication info."""
     try:
         result = subprocess.run(
-            ["claude", "-p", "--output-format", "json", "What is your current usage status?"],
+            ["claude", "auth", "status"],
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=10,
             check=False,
         )
-        if result.returncode == 0:
-            sys.stderr.write(result.stdout + "\n")
-        else:
-            sys.stderr.write(f"claude -p failed (exit {result.returncode})\n")
-            if result.stderr:
-                sys.stderr.write(result.stderr + "\n")
     except FileNotFoundError:
         sys.stderr.write("Error: Claude Code not found.\n")
         sys.exit(1)
     except subprocess.TimeoutExpired:
         sys.stderr.write("Error: Claude Code timed out.\n")
         sys.exit(1)
+    if result.returncode != 0:
+        sys.stderr.write("Claude Code: not authenticated\n")
+        return
+    try:
+        auth = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        sys.stderr.write(result.stdout)
+        return
+    sys.stderr.write(f"Email: {auth.get('email', '?')}\n")
+    sys.stderr.write(f"Subscription: {auth.get('subscriptionType', '?')}\n")
+    sys.stderr.write(f"Auth method: {auth.get('authMethod', '?')}\n")
+    sys.stderr.write(f"Logged in: {auth.get('loggedIn', False)}\n\n")
+
+
+def _show_usage_summary() -> None:
+    """Print local usage summary from trajectory data."""
+    runs = trajectory.list_runs("./termiclaw_runs")
+    if not runs:
+        sys.stderr.write("No local runs found.\n")
+        return
+    total_steps = sum(r.total_steps for r in runs)
+    total_chars = sum(r.prompt_chars for r in runs)
+    succeeded = sum(1 for r in runs if r.status == "succeeded")
+    failed = sum(1 for r in runs if r.status == "failed")
+    sys.stderr.write(f"Local runs: {len(runs)} ({succeeded} succeeded, {failed} failed)\n")
+    sys.stderr.write(f"Total steps: {total_steps}\n")
+    sys.stderr.write(f"Total prompt chars: {total_chars:,}\n")
 
 
 def _start_update_check() -> subprocess.Popen[bytes] | None:
