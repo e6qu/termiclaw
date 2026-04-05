@@ -3,8 +3,8 @@
 [![CI](https://github.com/e6qu/termiclaw/actions/workflows/ci.yml/badge.svg)](https://github.com/e6qu/termiclaw/actions/workflows/ci.yml)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue)](https://www.python.org/downloads/)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-green)](LICENSE)
-[![Code lines](https://img.shields.io/badge/code-1612%20lines-blue)]
-[![Test lines](https://img.shields.io/badge/tests-1911%20lines-blue)]
+[![Code lines](https://img.shields.io/badge/code-2074%20lines-blue)]
+[![Test lines](https://img.shields.io/badge/tests-2161%20lines-blue)]
 
 A Terminus-style terminal agent that uses Claude Code as a planner and tmux as the execution substrate. Inspired by [Terminus-2](https://github.com/harbor-framework/harbor) from the Harbor Framework. See [TERMINUS.md](TERMINUS.md) for the reference implementation analysis.
 

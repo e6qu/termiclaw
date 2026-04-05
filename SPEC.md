@@ -805,3 +805,227 @@ The implementation is complete when:
 * Test coverage exceeds 90% with branch coverage
 * All logging is structured JSONL to stderr — no `print()` anywhere
 * No use of `Any`, `cast`, or `type: ignore` in the codebase
+
+---
+
+## 20. Evals, Benchmarking, and Autoresearch
+
+### 20.1 Terminal-Bench
+
+[Terminal-Bench](https://www.tbench.ai/) (tbench.ai) is the primary benchmark for terminal agents. Version 2.0 has 89 tasks across software engineering, biology, security, and gaming. Each task runs in a Docker container with automated verification tests.
+
+Key design decisions relevant to Termiclaw:
+
+- **Time-based limits** (not turn-based) — turn limits penalize agents that monitor long-running processes, which is exactly what terminal agents need to do well. Termiclaw's duration-based waiting aligns with this.
+- **Scaffolding matters** — the same model scores 2-6 points differently depending on the agent wrapping it. Agent architecture (prompt engineering, summarization, error recovery) is measurable.
+- **ATIF trajectories** — Terminal-Bench uses the [Agent Trajectory Interchange Format](https://github.com/laude-institute/harbor/blob/main/docs/rfcs/0001-trajectory-format.md) for logging. Termiclaw already writes ATIF-compatible JSONL.
+
+Leaderboard scores (Terminal-Bench 2.0, March 2026):
+
+| Agent | Score |
+|-------|-------|
+| Forge Code + Gemini 3.1 Pro | 78.4% |
+| Factory Droid + GPT-5.3-Codex | 77.3% |
+| KRAFTON Terminus-KIRA + Claude Opus 4.6 | 74.7% |
+| Claude Code (as shipped) | 65.4% |
+| Terminus-2 + Claude Sonnet 4.6 | 59.6% |
+
+The 15-point gap between Claude Opus 4.6 on neutral Terminus-2 (~59%) vs KRAFTON's agent (74.7%) demonstrates that agent engineering is a massive lever.
+
+Source: [tbench.ai/leaderboard/terminal-bench/2.0](https://www.tbench.ai/leaderboard/terminal-bench/2.0), [arxiv 2601.11868](https://arxiv.org/html/2601.11868v1)
+
+### 20.2 Karpathy's AutoResearch
+
+[AutoResearch](https://github.com/karpathy/autoresearch) (21k+ stars) runs ML experiments in an autonomous loop: an AI agent reads code, forms a hypothesis, modifies the code, runs the experiment under a fixed compute budget, and evaluates results. Only changes that beat the current best metric are kept.
+
+> "You are not touching any of the Python files like you normally would as a researcher. Instead, you are programming the program.md Markdown files that provide context to the AI agents." — [Karpathy](https://github.com/karpathy/autoresearch)
+
+The pattern applies directly to Termiclaw's eval-driven improvement:
+
+1. Define a `program.md` describing what to optimize (prompt template, summarization strategy, error recovery)
+2. Run Termiclaw against a task set (Terminal-Bench subset or custom tasks)
+3. Measure pass rate, token usage, cost, step count
+4. Keep only changes that improve metrics
+5. Repeat
+
+Source: [github.com/karpathy/autoresearch](https://github.com/karpathy/autoresearch), [VentureBeat](https://venturebeat.com/technology/andrej-karpathys-new-open-source-autoresearch-lets-you-run-hundreds-of-ai)
+
+### 20.3 Agent harness architecture
+
+An **agent harness** is the infrastructure layer that:
+- Provisions the execution environment (Docker container, tmux session)
+- Feeds the task description to the agent
+- Captures trajectories in a standard format (ATIF)
+- Runs verification tests after agent completion
+- Reports pass/fail with metrics
+
+Terminal-Bench, [SWE-bench](https://www.swebench.com/SWE-bench/), and similar benchmarks all use this pattern. The harness is separate from the agent — the same harness can evaluate different agents on the same tasks.
+
+Termiclaw's architecture maps to this directly:
+- `tmux.provision_session()` = environment provisioning
+- `agent.run()` = agent execution
+- `trajectory.append_step()` = trajectory capture
+- A missing piece: **automated verification** (the `VerifierSpec` from the original PLAN.md)
+
+Source: [Terminal-Bench Dataset Registry](https://www.tbench.ai/news/registry-and-adapters), [mini-swe-agent](https://github.com/SWE-agent/mini-swe-agent/)
+
+### 20.4 Eval-driven improvement strategy
+
+> "Final response evaluation tells you *what* went wrong. Trajectory evaluation tells you *where* it went wrong. Single step evaluation tells you *why* it went wrong." — [Anthropic, Demystifying Evals](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents)
+
+Concrete strategies for Termiclaw:
+
+**Failure categorization.** Tag every failed run with a root cause: `premature_completion`, `parse_failure`, `wrong_command`, `stuck_loop`, `timeout`, `hallucination`. The SQLite DB makes this queryable.
+
+**Prompt tuning via error patterns.** Quantify failure categories across runs. If 15% of failures are premature completion, strengthen the double-confirmation prompt. If 10% are parse failures, improve the auto-fix pipeline. Measure the effect.
+
+**A/B testing prompts.** Run the same task set with prompt variant A vs B. The 2-6 point scaffolding delta on Terminal-Bench shows these changes are measurable.
+
+**Trajectory analysis.** Use ATIF logs to find the exact step where reasoning diverged. Compare successful vs failed runs on the same task to identify the decision point.
+
+**Iterative refinement loop.** The autoresearch pattern: modify prompt/architecture → run evals → keep improvements → repeat. This is systematic, not ad-hoc.
+
+The arXiv paper "Evaluation-Driven Development of LLM Agents" ([2411.13768](https://arxiv.org/html/2411.13768v3)) formalizes this as **EDD**: "For LLM agents, evaluation results must inform a broader range of adaptive changes, including architectural refinements, pipeline adjustments, and updates to test suites."
+
+> "Teams without evals get stuck in reactive loops — catching issues only in production, where fixing one failure creates others." — [Anthropic](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents)
+
+Source: [Anthropic evals guide](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents), [EDD paper](https://arxiv.org/html/2411.13768v3), [LangChain trajectory evals](https://docs.langchain.com/langsmith/trajectory-evals)
+
+### 20.5 Roadmap for Termiclaw evals
+
+**Phase 1: Task runner.** Add a `termiclaw eval` command that runs a directory of task files, captures pass/fail via exit code or output matching, and reports aggregate results.
+
+**Phase 2: Terminal-Bench compatibility.** Implement the Terminal-Bench harness adapter so Termiclaw can be evaluated on the official benchmark. This requires Docker containerization and ATIF trajectory export (already partially done).
+
+**Phase 3: Autoresearch loop.** Create a `program.md` describing Termiclaw's optimization surface (prompt template, summarization triggers, error recovery). Use the autoresearch pattern to systematically improve pass rates on a task set.
+
+**Phase 4: Failure analysis dashboard.** Query the SQLite DB to categorize failures, track improvement over time, and identify the highest-leverage changes.
+
+### 20.6 Required features for eval support
+
+The following features are needed in Termiclaw to fully support evals and autoresearch. Items marked with `[MVP]` are required for Phase 1.
+
+#### Task verification `[MVP]`
+
+Tasks need a machine-checkable success condition. Add a `VerifierSpec` to the task definition:
+
+```toml
+# task.toml
+instruction = "Create hello.txt with 'hello world'"
+
+[verifier]
+command = "cat hello.txt"
+expected_output = "hello world"
+timeout_seconds = 10
+```
+
+The verifier runs after the agent signals completion. Exit code 0 + output match = pass. This replaces the current "trust the LLM's self-assessment" approach.
+
+#### `termiclaw eval` command `[MVP]`
+
+```bash
+termiclaw eval tasks/           # run all .toml files in directory
+termiclaw eval tasks/ --repeat 3  # run each task 3 times for statistical significance
+termiclaw eval tasks/ --model sonnet  # override planner model
+termiclaw eval tasks/ --parallel 4    # run 4 tasks concurrently
+```
+
+Outputs a results table:
+
+```
+TASK                    PASS  FAIL  RATE   AVG STEPS  AVG COST
+create-file             3/3   0/3   100%   2.0        $0.02
+fix-test                2/3   1/3   67%    5.3        $0.08
+multi-step-project      1/3   2/3   33%    12.0       $0.15
+TOTAL                   6/9   3/9   67%
+```
+
+Results stored in SQLite DB alongside run data.
+
+#### Docker isolation
+
+Terminal-Bench runs tasks in Docker containers. Termiclaw needs:
+
+```bash
+termiclaw eval tasks/ --docker          # run each task in a fresh container
+termiclaw eval tasks/ --docker-image ubuntu:24.04
+```
+
+The Docker adapter replaces `tmux.provision_session()` with container creation + tmux inside the container. This ensures tasks can't interfere with each other or the host.
+
+#### Prompt variants and A/B testing
+
+```bash
+termiclaw eval tasks/ --prompt-file prompts/v2.txt   # test alternate prompt
+termiclaw eval tasks/ --prompt-file prompts/v1.txt prompts/v2.txt  # A/B compare
+```
+
+The eval command runs the same tasks with each prompt variant and reports comparative results. Prompt templates become first-class configurable artifacts, not hardcoded strings.
+
+#### ATIF export `[MVP]`
+
+```bash
+termiclaw export <run-id> --format atif    # export a single run
+termiclaw export --all --format atif       # export all runs
+```
+
+Produces ATIF-v1.6 compatible JSON for submission to Terminal-Bench or for SFT/RL training pipelines. The current trajectory.jsonl is close but needs: `schema_version`, `session_id` wrapper, `model_name` per step, `reasoning_content` field.
+
+#### Failure tagging `[MVP]`
+
+```bash
+termiclaw tag <run-id> --failure premature_completion
+termiclaw tag <run-id> --failure wrong_command --step 5
+termiclaw failures                  # show failure category breakdown
+termiclaw failures --since 7d       # last 7 days
+```
+
+Tags stored in SQLite. Enables the failure categorization strategy from section 20.4.
+
+#### Autoresearch integration
+
+A `program.md` file describes the optimization surface:
+
+```markdown
+# Termiclaw Optimization
+
+## What to optimize
+- Prompt template (`termiclaw/planner.py:_PROMPT_TEMPLATE`)
+- Summarization threshold (`Config.summarization_threshold`)
+- Duration estimation guidance in prompt
+- Error recovery prompt text
+
+## Eval command
+termiclaw eval tasks/benchmark/ --repeat 3
+
+## Metric
+Pass rate on task set (higher is better)
+
+## Budget
+Each experiment: max 10 tasks, max $5 API cost
+```
+
+The autoresearch loop: read `program.md` → form hypothesis → modify code → run eval → compare to baseline → keep or discard. This can be driven by Claude Code itself or by a separate orchestrator.
+
+#### Model routing
+
+The [OpenDev paper](https://arxiv.org/abs/2603.05344) shows that workload-specialized model routing improves both performance and cost. For Termiclaw:
+
+- Use a fast/cheap model (Haiku, Sonnet) for simple observations (shell idle, command completed)
+- Use a capable model (Opus) for complex reasoning (debugging, multi-step planning)
+- Route based on observation complexity (output length, error presence, step count)
+
+```bash
+termiclaw run "fix the bug" --model-router auto   # adaptive routing
+termiclaw run "fix the bug" --model opus           # force specific model
+```
+
+#### Metrics collection
+
+The SQLite DB already tracks tokens and cost. Additional metrics needed for eval analysis:
+
+- **Time to first action**: how long before the agent sends its first command
+- **Observation-to-action ratio**: are observations being wasted on no-ops?
+- **Backtrack count**: how many times did the agent undo or retry an approach?
+- **Verifier calls**: how many verification attempts before success?
+- **Context utilization**: what fraction of the prompt is actual content vs template?

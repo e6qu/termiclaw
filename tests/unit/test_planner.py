@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from termiclaw.planner import build_prompt, parse_response, query_planner
+from termiclaw.planner import build_prompt, extract_usage, parse_response, query_planner
 
 # --- Prompt building ---
 
@@ -236,3 +236,32 @@ def test_query_planner_includes_allowed_tools():
     assert "--allowedTools" in cmd_list
     idx = cmd_list.index("--allowedTools")
     assert cmd_list[idx + 1] == ""
+
+
+def test_extract_usage_valid():
+    raw = json.dumps(
+        {
+            "type": "result",
+            "result": "ok",
+            "total_cost_usd": 0.05,
+            "duration_ms": 3000,
+            "usage": {"input_tokens": 100, "cache_read_input_tokens": 50, "output_tokens": 200},
+        }
+    )
+    u = extract_usage(raw)
+    assert u.input_tokens == 150
+    assert u.output_tokens == 200
+    assert u.cost_usd == 0.05
+    assert u.duration_ms == 3000
+
+
+def test_extract_usage_empty():
+    u = extract_usage("")
+    assert u.input_tokens == 0
+    assert u.cost_usd == 0.0
+
+
+def test_extract_usage_no_usage_field():
+    raw = json.dumps({"type": "result", "result": "ok"})
+    u = extract_usage(raw)
+    assert u.input_tokens == 0

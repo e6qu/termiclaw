@@ -96,3 +96,16 @@ class RunInfo:
     termination_reason: str
     prompt_chars: int
     duration: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float = 0.0
+
+
+@dataclass(frozen=True)
+class PlannerUsage:
+    """Token/cost metrics from a single claude -p call."""
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float = 0.0
+    duration_ms: int = 0

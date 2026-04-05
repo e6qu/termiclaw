@@ -306,26 +306,40 @@ def test_show(tmp_path):
 # --- status ---
 
 
-def test_status_success():
-    with patch("termiclaw.cli.subprocess.run") as mock_run:
+def test_status_authenticated():
+    auth_json = json.dumps(
+        {
+            "loggedIn": True,
+            "authMethod": "claude.ai",
+            "email": "test@example.com",
+            "subscriptionType": "max",
+        }
+    )
+    with (
+        patch("termiclaw.cli.subprocess.run") as mock_run,
+        patch("termiclaw.cli.trajectory.list_runs", return_value=[]),
+    ):
         mock_run.return_value = subprocess.CompletedProcess(
             args=[],
             returncode=0,
-            stdout='{"status":"ok"}',
+            stdout=auth_json,
             stderr="",
         )
-        _status()
+        _status(argparse.Namespace(runs_dir="./termiclaw_runs"))
 
 
-def test_status_failure():
-    with patch("termiclaw.cli.subprocess.run") as mock_run:
+def test_status_not_authenticated():
+    with (
+        patch("termiclaw.cli.subprocess.run") as mock_run,
+        patch("termiclaw.cli.trajectory.list_runs", return_value=[]),
+    ):
         mock_run.return_value = subprocess.CompletedProcess(
             args=[],
             returncode=1,
             stdout="",
-            stderr="rate limited",
+            stderr="",
         )
-        _status()
+        _status(argparse.Namespace(runs_dir="./termiclaw_runs"))
 
 
 def test_status_not_found():
@@ -333,18 +347,61 @@ def test_status_not_found():
         patch("termiclaw.cli.subprocess.run", side_effect=FileNotFoundError),
         pytest.raises(SystemExit),
     ):
-        _status()
+        _status(argparse.Namespace(runs_dir="./termiclaw_runs"))
 
 
 def test_status_timeout():
     with (
         patch(
             "termiclaw.cli.subprocess.run",
-            side_effect=subprocess.TimeoutExpired(cmd="claude", timeout=30),
+            side_effect=subprocess.TimeoutExpired(cmd="claude", timeout=10),
         ),
         pytest.raises(SystemExit),
     ):
-        _status()
+        _status(argparse.Namespace(runs_dir="./termiclaw_runs"))
+
+
+def test_status_with_runs():
+    auth_json = json.dumps(
+        {"loggedIn": True, "email": "t@t.com", "subscriptionType": "max", "authMethod": "claude.ai"}
+    )
+    mock_runs = [
+        RunInfo(
+            run_id="a",
+            instruction="x",
+            status="succeeded",
+            total_steps=5,
+            started_at="t",
+            finished_at="t",
+            tmux_session="t",
+            termination_reason="done",
+            prompt_chars=1000,
+            duration="10s",
+        ),
+        RunInfo(
+            run_id="b",
+            instruction="y",
+            status="failed",
+            total_steps=3,
+            started_at="t",
+            finished_at="t",
+            tmux_session="t",
+            termination_reason="err",
+            prompt_chars=500,
+            duration="5s",
+        ),
+    ]
+    with (
+        patch("termiclaw.cli.subprocess.run") as mock_run,
+        patch("termiclaw.cli.trajectory.list_runs", return_value=mock_runs),
+    ):
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=auth_json,
+            stderr="",
+        )
+        _status(argparse.Namespace(runs_dir="./termiclaw_runs"))
 
 
 # --- Version check ---

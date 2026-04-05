@@ -10,11 +10,12 @@ import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from termiclaw import planner, summarizer, tmux, trajectory
+from termiclaw import db, planner, summarizer, tmux, trajectory
 from termiclaw.logging import get_logger, setup_logging
-from termiclaw.models import Config, ParseResult, RunState, StepRecord
+from termiclaw.models import Config, ParseResult, PlannerUsage, RunState, StepRecord
 
 if TYPE_CHECKING:
+    import sqlite3
     from pathlib import Path
 
 _log = get_logger("agent")
@@ -33,6 +34,7 @@ def run(config: Config) -> RunState:
     _log.info("Starting run", extra={"run_id": run_id, "instruction": config.instruction})
 
     run_dir = trajectory.ensure_run_dir(config.runs_dir, run_id)
+    conn = db.init_db()
     state = RunState(
         run_id=run_id,
         instruction=config.instruction,
@@ -41,6 +43,7 @@ def run(config: Config) -> RunState:
         status="active",
         max_turns=config.max_turns,
     )
+    db.insert_run(conn, state)
 
     try:
         tmux.provision_session(
@@ -60,22 +63,37 @@ def run(config: Config) -> RunState:
             finished_at=finished,
             termination_reason="tmux_provision_failed",
         )
+        db.update_run(conn, state, finished_at=finished, termination_reason="tmux_provision_failed")
+        conn.close()
         _log.info("Run finished", extra={"status": state.status, "steps": state.current_step})
         return state
 
     try:
-        _run_loop(state, config, run_dir)
+        _run_loop(state, config, run_dir, conn)
     except KeyboardInterrupt:
         _log.info("Interrupted by user")
         state.status = "cancelled"
     finally:
         finished = datetime.now(tz=UTC).isoformat()
+        reason = _termination_reason(state)
         trajectory.write_run_metadata(
             run_dir,
             state,
             finished_at=finished,
-            termination_reason=_termination_reason(state),
+            termination_reason=reason,
         )
+        usage = _get_run_usage(conn, state.run_id)
+        db.update_run(
+            conn,
+            state,
+            finished_at=finished,
+            termination_reason=reason,
+            total_prompt_chars=state.total_prompt_chars,
+            total_input_tokens=usage.input_tokens,
+            total_output_tokens=usage.output_tokens,
+            total_cost_usd=usage.cost_usd,
+        )
+        conn.close()
         if not config.keep_session:
             tmux.destroy_session(session_name)
         _log.info("Run finished", extra={"status": state.status, "steps": state.current_step})
@@ -83,7 +101,20 @@ def run(config: Config) -> RunState:
     return state
 
 
-def _run_loop(state: RunState, config: Config, run_dir: Path) -> None:
+def _get_run_usage(conn: sqlite3.Connection, run_id: str) -> PlannerUsage:
+    """Aggregate usage from steps table for a run."""
+    cursor = conn.execute(
+        "SELECT COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), "
+        "COALESCE(SUM(cost_usd),0.0) FROM steps WHERE run_id=?",
+        (run_id,),
+    )
+    row = cursor.fetchone()
+    if not row:
+        return PlannerUsage()
+    return PlannerUsage(input_tokens=row[0], output_tokens=row[1], cost_usd=row[2])
+
+
+def _run_loop(state: RunState, config: Config, run_dir: Path, conn: sqlite3.Connection) -> None:
     """The main observe-decide-act loop."""
     prompt = ""
 
@@ -119,14 +150,16 @@ def _run_loop(state: RunState, config: Config, run_dir: Path) -> None:
                 error="Planner failed after retries",
             )
             trajectory.append_step(run_dir, error_step)
+            db.insert_step(conn, state.run_id, error_step, step_index=state.current_step)
             _track_step(state, error_step)
             prompt = "The planner failed to respond. Please try again."
             continue
 
+        usage = planner.extract_usage(raw)
         parsed = planner.parse_response(raw)
 
         if parsed.error:
-            _handle_parse_error(state, parsed, run_dir, prompt)
+            _handle_parse_error(state, parsed, run_dir, prompt, conn=conn, usage=usage)
             prompt = (
                 f"Previous response had parsing errors:\n{parsed.error}\n\n"
                 "Please fix these issues and respond with valid JSON."
@@ -134,7 +167,7 @@ def _run_loop(state: RunState, config: Config, run_dir: Path) -> None:
             continue
 
         if parsed.task_complete:
-            done = _handle_completion(state, parsed, run_dir, prompt)
+            done = _handle_completion(state, parsed, run_dir, prompt, conn=conn, usage=usage)
             if done:
                 break
             visible = tmux.capture_visible(state.tmux_session)
@@ -155,7 +188,7 @@ def _run_loop(state: RunState, config: Config, run_dir: Path) -> None:
         )
         output = tmux.truncate_output(output, max_bytes=config.max_output_bytes)
 
-        _log_step(state, output, parsed, run_dir)
+        _log_step(state, output, parsed, run_dir, conn=conn, usage=usage)
         prompt = output
 
     else:
@@ -168,6 +201,9 @@ def _handle_parse_error(
     parsed: ParseResult,
     run_dir: Path,
     observation: str,
+    *,
+    conn: sqlite3.Connection | None = None,
+    usage: PlannerUsage | None = None,
 ) -> None:
     """Log a parse error step."""
     _log.warning("Parse error", extra={"error": parsed.error})
@@ -179,6 +215,18 @@ def _handle_parse_error(
         error=parsed.error,
     )
     trajectory.append_step(run_dir, step)
+    if conn:
+        u = usage or PlannerUsage()
+        db.insert_step(
+            conn,
+            state.run_id,
+            step,
+            step_index=state.current_step,
+            input_tokens=u.input_tokens,
+            output_tokens=u.output_tokens,
+            cost_usd=u.cost_usd,
+            planner_duration_ms=u.duration_ms,
+        )
     _track_step(state, step)
 
 
@@ -187,6 +235,9 @@ def _handle_completion(
     parsed: ParseResult,
     run_dir: Path,
     observation: str,
+    *,
+    conn: sqlite3.Connection | None = None,
+    usage: PlannerUsage | None = None,
 ) -> bool:
     """Handle task_complete. Returns True if confirmed (break loop)."""
     if state.pending_completion:
@@ -202,6 +253,18 @@ def _handle_completion(
             task_complete=True,
         )
         trajectory.append_step(run_dir, step)
+        if conn:
+            u = usage or PlannerUsage()
+            db.insert_step(
+                conn,
+                state.run_id,
+                step,
+                step_index=state.current_step,
+                input_tokens=u.input_tokens,
+                output_tokens=u.output_tokens,
+                cost_usd=u.cost_usd,
+                planner_duration_ms=u.duration_ms,
+            )
         _track_step(state, step)
         return True
 
@@ -271,6 +334,9 @@ def _log_step(
     observation: str,
     parsed: ParseResult,
     run_dir: Path,
+    *,
+    conn: sqlite3.Connection | None = None,
+    usage: PlannerUsage | None = None,
 ) -> None:
     """Log a normal step."""
     step = StepRecord(
@@ -284,6 +350,18 @@ def _log_step(
         metrics=(("prompt_chars", state.total_prompt_chars),),
     )
     trajectory.append_step(run_dir, step)
+    if conn:
+        u = usage or PlannerUsage()
+        db.insert_step(
+            conn,
+            state.run_id,
+            step,
+            step_index=state.current_step,
+            input_tokens=u.input_tokens,
+            output_tokens=u.output_tokens,
+            cost_usd=u.cost_usd,
+            planner_duration_ms=u.duration_ms,
+        )
     _track_step(state, step)
     _log.info("Step completed", extra={"step": state.current_step})
 
