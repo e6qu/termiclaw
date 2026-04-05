@@ -391,31 +391,26 @@ def test_finish_update_check_none():
 
 
 def test_finish_update_check_no_update(capsys):
-    mock_stdout = MagicMock()
-    mock_stdout.read.return_value = b"abc\trefs/tags/termiclaw-v0.0.1\n"
     mock_proc = MagicMock()
-    mock_proc.poll.return_value = 0
+    mock_proc.communicate.return_value = (b"abc\trefs/tags/termiclaw-v0.0.1\n", b"")
     mock_proc.returncode = 0
-    mock_proc.stdout = mock_stdout
     _finish_update_check(mock_proc)
     captured = capsys.readouterr()
     assert "Update available" not in captured.err
 
 
 def test_finish_update_check_with_update(capsys):
-    mock_stdout = MagicMock()
-    mock_stdout.read.return_value = b"abc\trefs/tags/termiclaw-v99.0.0\n"
     mock_proc = MagicMock()
-    mock_proc.poll.return_value = 0
+    mock_proc.communicate.return_value = (b"abc\trefs/tags/termiclaw-v99.0.0\n", b"")
     mock_proc.returncode = 0
-    mock_proc.stdout = mock_stdout
     _finish_update_check(mock_proc)
     captured = capsys.readouterr()
     assert "Update available" in captured.err
     assert "99.0.0" in captured.err
 
 
-def test_finish_update_check_still_running():
+def test_finish_update_check_timeout():
     mock_proc = MagicMock()
-    mock_proc.poll.return_value = None  # still running
-    _finish_update_check(mock_proc)  # should return immediately, no block
+    mock_proc.communicate.side_effect = subprocess.TimeoutExpired(cmd="git", timeout=2)
+    _finish_update_check(mock_proc)
+    mock_proc.kill.assert_called_once()
