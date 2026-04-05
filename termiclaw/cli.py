@@ -45,7 +45,8 @@ def main() -> None:
     show_parser.add_argument("run_id", help="Run ID (or prefix)")
     show_parser.add_argument("--runs-dir", default="./termiclaw_runs")
 
-    sub.add_parser("status", help="Show auth status and usage summary")
+    status_parser = sub.add_parser("status", help="Show auth status and usage summary")
+    status_parser.add_argument("--runs-dir", default="./termiclaw_runs")
 
     args = parser.parse_args()
 
@@ -63,7 +64,7 @@ def main() -> None:
     elif args.command == "show":
         _show(args)
     elif args.command == "status":
-        _status()
+        _status(args)
 
     _finish_update_check(update_check)
 
@@ -221,10 +222,10 @@ def _print_trajectory(run_dir: Path) -> None:
         sys.stderr.write("\n")
 
 
-def _status() -> None:
+def _status(args: argparse.Namespace) -> None:
     """Show Claude Code auth status and local usage summary."""
     _show_auth_status()
-    _show_usage_summary()
+    _show_usage_summary(args.runs_dir)
 
 
 def _show_auth_status() -> None:
@@ -257,9 +258,9 @@ def _show_auth_status() -> None:
     sys.stderr.write(f"Logged in: {auth.get('loggedIn', False)}\n\n")
 
 
-def _show_usage_summary() -> None:
+def _show_usage_summary(runs_dir: str) -> None:
     """Print local usage summary from trajectory data."""
-    runs = trajectory.list_runs("./termiclaw_runs")
+    runs = trajectory.list_runs(runs_dir)
     if not runs:
         sys.stderr.write("No local runs found.\n")
         return

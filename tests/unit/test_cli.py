@@ -325,7 +325,7 @@ def test_status_authenticated():
             stdout=auth_json,
             stderr="",
         )
-        _status()
+        _status(argparse.Namespace(runs_dir="./termiclaw_runs"))
 
 
 def test_status_not_authenticated():
@@ -339,7 +339,7 @@ def test_status_not_authenticated():
             stdout="",
             stderr="",
         )
-        _status()
+        _status(argparse.Namespace(runs_dir="./termiclaw_runs"))
 
 
 def test_status_not_found():
@@ -347,7 +347,7 @@ def test_status_not_found():
         patch("termiclaw.cli.subprocess.run", side_effect=FileNotFoundError),
         pytest.raises(SystemExit),
     ):
-        _status()
+        _status(argparse.Namespace(runs_dir="./termiclaw_runs"))
 
 
 def test_status_timeout():
@@ -358,7 +358,7 @@ def test_status_timeout():
         ),
         pytest.raises(SystemExit),
     ):
-        _status()
+        _status(argparse.Namespace(runs_dir="./termiclaw_runs"))
 
 
 def test_status_with_runs():
@@ -401,7 +401,7 @@ def test_status_with_runs():
             stdout=auth_json,
             stderr="",
         )
-        _status()
+        _status(argparse.Namespace(runs_dir="./termiclaw_runs"))
 
 
 # --- Version check ---
