@@ -805,3 +805,82 @@ The implementation is complete when:
 * Test coverage exceeds 90% with branch coverage
 * All logging is structured JSONL to stderr — no `print()` anywhere
 * No use of `Any`, `cast`, or `type: ignore` in the codebase
+
+---
+
+## 20. Evals, Benchmarking, and Autoresearch
+
+### 20.1 Terminal-Bench
+
+[Terminal-Bench](https://www.tbench.ai/) (tbench.ai) is the primary benchmark for terminal agents. Version 2.0 has 89 tasks across software engineering, biology, security, and gaming. Each task runs in a Docker container with automated verification tests.
+
+Key design decisions relevant to Termiclaw:
+
+- **Time-based limits** (not turn-based) — turn limits penalize agents that monitor long-running processes, which is exactly what terminal agents need to do well. Termiclaw's duration-based waiting aligns with this.
+- **Scaffolding matters** — the same model scores 2-6 points differently depending on the agent wrapping it. Agent architecture (prompt engineering, summarization, error recovery) is measurable.
+- **ATIF trajectories** — Terminal-Bench uses the [Agent Trajectory Interchange Format](https://github.com/laude-institute/harbor/blob/main/docs/rfcs/0001-trajectory-format.md) for logging. Termiclaw already writes ATIF-compatible JSONL.
+
+Source: [tbench.ai/leaderboard/terminal-bench/2.0](https://www.tbench.ai/leaderboard/terminal-bench/2.0), [arxiv 2601.11868](https://arxiv.org/html/2601.11868v1)
+
+### 20.2 Karpathy's AutoResearch
+
+[AutoResearch](https://github.com/karpathy/autoresearch) (21k+ stars) runs ML experiments in an autonomous loop: an AI agent reads code, forms a hypothesis, modifies the code, runs the experiment under a fixed compute budget, and evaluates results. Only changes that beat the current best metric are kept.
+
+> "You are not touching any of the Python files like you normally would as a researcher. Instead, you are programming the program.md Markdown files that provide context to the AI agents." — [Karpathy](https://github.com/karpathy/autoresearch)
+
+The pattern applies directly to Termiclaw's eval-driven improvement:
+
+1. Define a `program.md` describing what to optimize (prompt template, summarization strategy, error recovery)
+2. Run Termiclaw against a task set (Terminal-Bench subset or custom tasks)
+3. Measure pass rate, token usage, cost, step count
+4. Keep only changes that improve metrics
+5. Repeat
+
+Source: [github.com/karpathy/autoresearch](https://github.com/karpathy/autoresearch), [VentureBeat](https://venturebeat.com/technology/andrej-karpathys-new-open-source-autoresearch-lets-you-run-hundreds-of-ai)
+
+### 20.3 Agent harness architecture
+
+An **agent harness** is the infrastructure layer that:
+- Provisions the execution environment (Docker container, tmux session)
+- Feeds the task description to the agent
+- Captures trajectories in a standard format (ATIF)
+- Runs verification tests after agent completion
+- Reports pass/fail with metrics
+
+Terminal-Bench, [SWE-bench](https://www.swebench.com/SWE-bench/), and similar benchmarks all use this pattern. The harness is separate from the agent — the same harness can evaluate different agents on the same tasks.
+
+Termiclaw's architecture maps to this directly:
+- `tmux.provision_session()` = environment provisioning
+- `agent.run()` = agent execution
+- `trajectory.append_step()` = trajectory capture
+- A missing piece: **automated verification** (the `VerifierSpec` from the original PLAN.md)
+
+Source: [Terminal-Bench Dataset Registry](https://www.tbench.ai/news/registry-and-adapters), [mini-swe-agent](https://github.com/SWE-agent/mini-swe-agent/)
+
+### 20.4 Eval-driven improvement strategy
+
+> "Final response evaluation tells you *what* went wrong. Trajectory evaluation tells you *where* it went wrong. Single step evaluation tells you *why* it went wrong." — [Anthropic, Demystifying Evals](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents)
+
+Concrete strategies for Termiclaw:
+
+**Failure categorization.** Tag every failed run with a root cause: `premature_completion`, `parse_failure`, `wrong_command`, `stuck_loop`, `timeout`, `hallucination`. The SQLite DB makes this queryable.
+
+**Prompt tuning via error patterns.** Quantify failure categories across runs. If 15% of failures are premature completion, strengthen the double-confirmation prompt. If 10% are parse failures, improve the auto-fix pipeline. Measure the effect.
+
+**A/B testing prompts.** Run the same task set with prompt variant A vs B. The 2-6 point scaffolding delta on Terminal-Bench shows these changes are measurable.
+
+**Trajectory analysis.** Use ATIF logs to find the exact step where reasoning diverged. Compare successful vs failed runs on the same task to identify the decision point.
+
+**Iterative refinement loop.** The autoresearch pattern: modify prompt/architecture → run evals → keep improvements → repeat. This is systematic, not ad-hoc.
+
+Source: [Anthropic evals guide](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents), [LangChain trajectory evals](https://docs.langchain.com/langsmith/trajectory-evals)
+
+### 20.5 Roadmap for Termiclaw evals
+
+**Phase 1: Task runner.** Add a `termiclaw eval` command that runs a directory of task files, captures pass/fail via exit code or output matching, and reports aggregate results.
+
+**Phase 2: Terminal-Bench compatibility.** Implement the Terminal-Bench harness adapter so Termiclaw can be evaluated on the official benchmark. This requires Docker containerization and ATIF trajectory export (already partially done).
+
+**Phase 3: Autoresearch loop.** Create a `program.md` describing Termiclaw's optimization surface (prompt template, summarization triggers, error recovery). Use the autoresearch pattern to systematically improve pass rates on a task set.
+
+**Phase 4: Failure analysis dashboard.** Query the SQLite DB to categorize failures, track improvement over time, and identify the highest-leverage changes.
