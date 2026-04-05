@@ -6,7 +6,7 @@ import json
 import subprocess
 
 from termiclaw.logging import get_logger
-from termiclaw.models import ParsedCommand, ParseResult
+from termiclaw.models import ParsedCommand, ParseResult, PlannerUsage
 
 _log = get_logger("planner")
 
@@ -215,6 +215,29 @@ def _try_extract_json(text: str) -> dict[str, object] | None:
         return None
     candidate = text[first_brace : last_brace + 1]
     return _try_loads(candidate)
+
+
+def extract_usage(raw_stdout: str) -> PlannerUsage:
+    """Extract token/cost metrics from the claude -p JSON envelope."""
+    try:
+        envelope = json.loads(raw_stdout)
+    except (json.JSONDecodeError, TypeError):
+        return PlannerUsage()
+    if not isinstance(envelope, dict):
+        return PlannerUsage()
+    usage = envelope.get("usage", {})
+    if not isinstance(usage, dict):
+        usage = {}
+    input_tokens = int(usage.get("input_tokens", 0)) + int(usage.get("cache_read_input_tokens", 0))
+    output_tokens = int(usage.get("output_tokens", 0))
+    cost_usd = float(envelope.get("total_cost_usd", 0.0))
+    duration_ms = int(envelope.get("duration_ms", 0))
+    return PlannerUsage(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cost_usd=cost_usd,
+        duration_ms=duration_ms,
+    )
 
 
 def query_planner(prompt: str, *, timeout: int = 300, retries: int = 3) -> str:

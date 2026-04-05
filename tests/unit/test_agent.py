@@ -159,10 +159,11 @@ def test_handle_completion_populates_recent_steps(tmp_path):
 # --- Planner failure logging ---
 
 
+@patch("termiclaw.agent.db")
 @patch("termiclaw.agent.tmux")
 @patch("termiclaw.agent.planner")
 @patch("termiclaw.agent.time")
-def test_run_planner_failure_logged(mock_time, mock_planner, mock_tmux, tmp_path):
+def test_run_planner_failure_logged(mock_time, mock_planner, mock_tmux, mock_db, tmp_path):
     mock_tmux.is_session_alive.side_effect = [True, False]
     mock_planner.build_prompt.return_value = "prompt"
     mock_planner.query_planner.side_effect = RuntimeError("fail")
@@ -178,9 +179,10 @@ def test_run_planner_failure_logged(mock_time, mock_planner, mock_tmux, tmp_path
 # --- Provision failure ---
 
 
+@patch("termiclaw.agent.db")
 @patch("termiclaw.agent.tmux")
 @patch("termiclaw.agent.time")
-def test_run_provision_failure(mock_time, mock_tmux, tmp_path):
+def test_run_provision_failure(mock_time, mock_tmux, mock_db, tmp_path):
     mock_tmux.provision_session.side_effect = sp.CalledProcessError(1, "tmux")
 
     config = Config(instruction="task", runs_dir=str(tmp_path / "runs"))
@@ -191,10 +193,11 @@ def test_run_provision_failure(mock_time, mock_tmux, tmp_path):
 # --- Full run (heavily mocked) ---
 
 
+@patch("termiclaw.agent.db")
 @patch("termiclaw.agent.tmux")
 @patch("termiclaw.agent.planner")
 @patch("termiclaw.agent.time")
-def test_run_simple_task(mock_time, mock_planner, mock_tmux, tmp_path):
+def test_run_simple_task(mock_time, mock_planner, mock_tmux, mock_db, tmp_path):
     mock_tmux.is_session_alive.side_effect = [True, True, True]
     mock_tmux.get_incremental_output.return_value = (
         "New Terminal Output:\nhello",
@@ -221,10 +224,11 @@ def test_run_simple_task(mock_time, mock_planner, mock_tmux, tmp_path):
     assert state.current_step >= 1
 
 
+@patch("termiclaw.agent.db")
 @patch("termiclaw.agent.tmux")
 @patch("termiclaw.agent.planner")
 @patch("termiclaw.agent.time")
-def test_run_session_dies(mock_time, mock_planner, mock_tmux, tmp_path):
+def test_run_session_dies(mock_time, mock_planner, mock_tmux, mock_db, tmp_path):
     mock_tmux.is_session_alive.return_value = False
 
     config = Config(instruction="task", runs_dir=str(tmp_path / "runs"))
@@ -232,10 +236,11 @@ def test_run_session_dies(mock_time, mock_planner, mock_tmux, tmp_path):
     assert state.status == "failed"
 
 
+@patch("termiclaw.agent.db")
 @patch("termiclaw.agent.tmux")
 @patch("termiclaw.agent.planner")
 @patch("termiclaw.agent.time")
-def test_run_max_turns(mock_time, mock_planner, mock_tmux, tmp_path):
+def test_run_max_turns(mock_time, mock_planner, mock_tmux, mock_db, tmp_path):
     mock_tmux.is_session_alive.return_value = True
     mock_tmux.get_incremental_output.return_value = ("output", "buf")
     mock_tmux.truncate_output.side_effect = lambda text, **_kw: text
