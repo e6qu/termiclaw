@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/e6qu/termiclaw/compare/termiclaw-v0.3.0...termiclaw-v0.3.1) (2026-04-05)
+
+
+### Bug Fixes
+
+* add --repo flag to gh commands in release workflow ([#10](https://github.com/e6qu/termiclaw/issues/10)) ([4732fa8](https://github.com/e6qu/termiclaw/commit/4732fa86acdc49903e9ebbe3db53eef62d4c6b73))
+
 ## [0.3.0](https://github.com/e6qu/termiclaw/compare/termiclaw-v0.2.0...termiclaw-v0.3.0) (2026-04-05)
 
 
