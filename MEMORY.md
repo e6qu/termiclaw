@@ -1,0 +1,3 @@
+- [Project overview](memory/project_overview.md) — Termiclaw: Terminus-style terminal agent using Claude Code + tmux
+- [User preferences](memory/user_preferences.md) — Lean code, vanilla Python, Terminus spirit, no over-engineering
+- [Legal boundaries](memory/legal_boundaries.md) — Claude Code subscription usage rules, opencode ban context
