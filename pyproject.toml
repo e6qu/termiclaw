@@ -1,6 +1,6 @@
 [project]
 name = "termiclaw"
-version = "0.4.1"
+version = "0.5.0"
 description = "Terminus-style terminal agent using Claude Code and tmux"
 requires-python = ">=3.13"
 license = "AGPL-3.0-or-later"

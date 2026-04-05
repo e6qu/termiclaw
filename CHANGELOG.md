@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/e6qu/termiclaw/compare/termiclaw-v0.4.1...termiclaw-v0.5.0) (2026-04-05)
+
+
+### Features
+
+* add background version check on every CLI invocation ([#15](https://github.com/e6qu/termiclaw/issues/15)) ([53b77f9](https://github.com/e6qu/termiclaw/commit/53b77f99b32b3863d501bbff4d75614a6ca8d318))
+
 ## [0.4.1](https://github.com/e6qu/termiclaw/compare/termiclaw-v0.4.0...termiclaw-v0.4.1) (2026-04-05)
 
 
