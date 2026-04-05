@@ -1,5 +1,7 @@
 # Terminus-2 Agent: Source Code Reference
 
+This document is the reference analysis of Terminus-2's source code. Termiclaw's implementation spec is in [SPEC.md](SPEC.md). For differences between Terminus and Termiclaw, see SPEC.md section 17.
+
 ## Overview
 
 Terminus-2 is a terminal AI agent from the Harbor Framework (`harbor-framework/harbor`), located at `src/harbor/agents/terminus_2/`. It is model-agnostic, uses tmux as its sole execution substrate, and controls terminals through raw keystrokes only.

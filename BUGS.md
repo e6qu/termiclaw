@@ -1,5 +1,7 @@
 # Bugs
 
+Found and tracked across 4 review rounds. See [SPEC.md](SPEC.md) for the implementation specification and [CONTRIBUTING.md](CONTRIBUTING.md) for how to report issues.
+
 ## Fixed
 
 | ID | Severity | Summary | File | Fix |

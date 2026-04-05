@@ -14,77 +14,80 @@ git clone https://github.com/e6qu/termiclaw.git
 cd termiclaw
 uv sync --all-groups
 uv run pre-commit install
+uv run pre-commit install --hook-type commit-msg
 ```
 
-Pre-commit hooks run automatically on every commit: trailing whitespace fix, ruff lint + format, and type checking. Unit tests run on `git push`.
+## Pre-commit hooks
+
+Installed automatically by `pre-commit install`:
+
+| Stage | Hook | What it does |
+|-------|------|-------------|
+| pre-commit | trailing-whitespace, end-of-file-fixer | Whitespace cleanup |
+| pre-commit | check-yaml, check-json, check-toml | Config file validation |
+| pre-commit | check-branch | Blocks commits on `main`, requires rebase on `origin/main` |
+| pre-commit | ruff, ruff-format | Lint and auto-format |
+| pre-commit | ty-check | Type checking |
+| commit-msg | conventional-pre-commit | Conventional commit format |
+| pre-push | pytest-unit | Unit tests with coverage |
 
 ## Running tests
 
 ```bash
-# Unit tests (no external deps needed)
+# Unit tests
 uv run pytest
 
 # Integration tests (requires tmux)
 uv run pytest tests/integration/ -m integration
 
-# With verbose output
-uv run pytest -v
+# With coverage
+uv run pytest --cov=termiclaw --cov-branch
 ```
 
 ## Linting and type checking
 
-All three must pass before committing:
+All enforced by pre-commit, but can be run manually:
 
 ```bash
-uv run ruff check .
-uv run ruff format --check .
-uv run ty check
-```
-
-To auto-fix formatting:
-
-```bash
-uv run ruff format .
+uv run ruff check .       # lint
+uv run ruff format .      # auto-format
+uv run ty check           # type check
 ```
 
 ## Conventional commits
 
-This project uses [release-please](https://github.com/googleapis/release-please) for automated releases. Commit messages must follow [Conventional Commits](https://www.conventionalcommits.org/):
+Commit messages must follow [Conventional Commits](https://www.conventionalcommits.org/) (enforced by pre-commit and CI):
 
 ```
 feat: add replay command
-fix: handle empty terminal output in incremental diff
-docs: update README with new CLI flags
-chore: bump ruff to 0.12
+fix: handle empty terminal output
+docs: update README
+chore: bump ruff
 ```
 
-- `feat:` triggers a minor version bump
-- `fix:` triggers a patch version bump
-- `BREAKING CHANGE:` in the commit body triggers a major version bump
+`feat:` = minor bump, `fix:` = patch bump, `BREAKING CHANGE:` in body = major bump. Releases are automated by [release-please](https://github.com/googleapis/release-please).
 
 ## Pull request process
 
-1. Fork the repo and create a branch
-2. Make your changes
-3. Ensure `ruff check`, `ruff format --check`, `ty check`, and `pytest` all pass
-4. Write tests for new functionality
-5. Use conventional commit messages
-6. Open a PR against `main`
+1. Create a branch from `main` (never commit directly to `main`)
+2. Make changes, let pre-commit hooks run
+3. Push (pre-push runs unit tests)
+4. Open a PR against `main`
 
 ## Architecture
 
-See [SPEC.md](SPEC.md) for the full specification and [TERMINUS.md](TERMINUS.md) for the Terminus-2 reference.
+See [SPEC.md](SPEC.md) for the full specification.
 
 ```
 termiclaw/
-  cli.py            argparse, startup checks
+  cli.py            argparse, startup checks, list/show/status
   agent.py          observe-decide-act loop
-  planner.py        claude -p invocation, JSON parsing
+  planner.py        claude -p invocation, JSON parsing, auto-fix
   tmux.py           tmux subprocess wrapper
-  models.py         dataclasses
+  models.py         dataclasses (Config, RunState, ParseResult, etc.)
   summarizer.py     three-subagent pipeline
-  trajectory.py     JSONL logging
+  trajectory.py     JSONL logging, run listing
   logging.py        structured JSON formatter
 ```
 
-Zero runtime dependencies. Dev dependencies: pytest, pytest-cov, ruff, ty.
+Zero runtime dependencies. Dev: pytest, pytest-cov, ruff, ty, pre-commit.
