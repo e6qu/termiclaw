@@ -884,3 +884,132 @@ Source: [Anthropic evals guide](https://www.anthropic.com/engineering/demystifyi
 **Phase 3: Autoresearch loop.** Create a `program.md` describing Termiclaw's optimization surface (prompt template, summarization triggers, error recovery). Use the autoresearch pattern to systematically improve pass rates on a task set.
 
 **Phase 4: Failure analysis dashboard.** Query the SQLite DB to categorize failures, track improvement over time, and identify the highest-leverage changes.
+
+### 20.6 Required features for eval support
+
+The following features are needed in Termiclaw to fully support evals and autoresearch. Items marked with `[MVP]` are required for Phase 1.
+
+#### Task verification `[MVP]`
+
+Tasks need a machine-checkable success condition. Add a `VerifierSpec` to the task definition:
+
+```toml
+# task.toml
+instruction = "Create hello.txt with 'hello world'"
+
+[verifier]
+command = "cat hello.txt"
+expected_output = "hello world"
+timeout_seconds = 10
+```
+
+The verifier runs after the agent signals completion. Exit code 0 + output match = pass. This replaces the current "trust the LLM's self-assessment" approach.
+
+#### `termiclaw eval` command `[MVP]`
+
+```bash
+termiclaw eval tasks/           # run all .toml files in directory
+termiclaw eval tasks/ --repeat 3  # run each task 3 times for statistical significance
+termiclaw eval tasks/ --model sonnet  # override planner model
+termiclaw eval tasks/ --parallel 4    # run 4 tasks concurrently
+```
+
+Outputs a results table:
+
+```
+TASK                    PASS  FAIL  RATE   AVG STEPS  AVG COST
+create-file             3/3   0/3   100%   2.0        $0.02
+fix-test                2/3   1/3   67%    5.3        $0.08
+multi-step-project      1/3   2/3   33%    12.0       $0.15
+TOTAL                   6/9   3/9   67%
+```
+
+Results stored in SQLite DB alongside run data.
+
+#### Docker isolation
+
+Terminal-Bench runs tasks in Docker containers. Termiclaw needs:
+
+```bash
+termiclaw eval tasks/ --docker          # run each task in a fresh container
+termiclaw eval tasks/ --docker-image ubuntu:24.04
+```
+
+The Docker adapter replaces `tmux.provision_session()` with container creation + tmux inside the container. This ensures tasks can't interfere with each other or the host.
+
+#### Prompt variants and A/B testing
+
+```bash
+termiclaw eval tasks/ --prompt-file prompts/v2.txt   # test alternate prompt
+termiclaw eval tasks/ --prompt-file prompts/v1.txt prompts/v2.txt  # A/B compare
+```
+
+The eval command runs the same tasks with each prompt variant and reports comparative results. Prompt templates become first-class configurable artifacts, not hardcoded strings.
+
+#### ATIF export `[MVP]`
+
+```bash
+termiclaw export <run-id> --format atif    # export a single run
+termiclaw export --all --format atif       # export all runs
+```
+
+Produces ATIF-v1.6 compatible JSON for submission to Terminal-Bench or for SFT/RL training pipelines. The current trajectory.jsonl is close but needs: `schema_version`, `session_id` wrapper, `model_name` per step, `reasoning_content` field.
+
+#### Failure tagging `[MVP]`
+
+```bash
+termiclaw tag <run-id> --failure premature_completion
+termiclaw tag <run-id> --failure wrong_command --step 5
+termiclaw failures                  # show failure category breakdown
+termiclaw failures --since 7d       # last 7 days
+```
+
+Tags stored in SQLite. Enables the failure categorization strategy from section 20.4.
+
+#### Autoresearch integration
+
+A `program.md` file describes the optimization surface:
+
+```markdown
+# Termiclaw Optimization
+
+## What to optimize
+- Prompt template (`termiclaw/planner.py:_PROMPT_TEMPLATE`)
+- Summarization threshold (`Config.summarization_threshold`)
+- Duration estimation guidance in prompt
+- Error recovery prompt text
+
+## Eval command
+termiclaw eval tasks/benchmark/ --repeat 3
+
+## Metric
+Pass rate on task set (higher is better)
+
+## Budget
+Each experiment: max 10 tasks, max $5 API cost
+```
+
+The autoresearch loop: read `program.md` → form hypothesis → modify code → run eval → compare to baseline → keep or discard. This can be driven by Claude Code itself or by a separate orchestrator.
+
+#### Model routing
+
+The [OpenDev paper](https://arxiv.org/abs/2603.05344) shows that workload-specialized model routing improves both performance and cost. For Termiclaw:
+
+- Use a fast/cheap model (Haiku, Sonnet) for simple observations (shell idle, command completed)
+- Use a capable model (Opus) for complex reasoning (debugging, multi-step planning)
+- Route based on observation complexity (output length, error presence, step count)
+
+```bash
+termiclaw run "fix the bug" --model-router auto   # adaptive routing
+termiclaw run "fix the bug" --model opus           # force specific model
+```
+
+#### Metrics collection
+
+The SQLite DB already tracks tokens and cost. Additional metrics needed for eval analysis:
+
+- **Time to first action**: how long before the agent sends its first command
+- **Observation-to-action ratio**: are observations being wasted on no-ops?
+- **Backtrack count**: how many times did the agent undo or retry an approach?
+- **Verifier calls**: how many verification attempts before success?
+- **Context utilization**: what fraction of the prompt is actual content vs template?
