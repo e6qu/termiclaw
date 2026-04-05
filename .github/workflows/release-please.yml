@@ -23,26 +23,24 @@ jobs:
         if: steps.release.outputs.release_created == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ steps.release.outputs.tag_name }}
         run: |
-          EXISTING=$(gh release view "$TAG" --json body -q .body)
-          HEADER=$(cat <<'INSTALL'
-          ## Installation
+          EXISTING=$(gh release view "$TAG" --repo "$GH_REPO" --json body -q .body)
+          HEADER="## Installation
 
-          ```bash
-          uv tool install git+https://github.com/e6qu/termiclaw.git@$TAG
-          ```
+          \`\`\`bash
+          uv tool install git+https://github.com/${GH_REPO}.git@${TAG}
+          \`\`\`
 
           ## Update
 
-          ```bash
+          \`\`\`bash
           uv tool upgrade termiclaw
-          ```
+          \`\`\`
 
           ---
 
-          INSTALL
-          )
-          # dedent the heredoc
+          "
           HEADER=$(echo "$HEADER" | sed 's/^          //')
-          gh release edit "$TAG" --notes "${HEADER}${EXISTING}"
+          gh release edit "$TAG" --repo "$GH_REPO" --notes "${HEADER}${EXISTING}"
