@@ -257,13 +257,18 @@ def _start_update_check() -> subprocess.Popen[bytes] | None:
         return None
 
 
+_UPDATE_CHECK_TIMEOUT_S = 2
+
+
 def _finish_update_check(proc: subprocess.Popen[bytes] | None) -> None:
-    """Check the result of the background version check. Never blocks."""
+    """Wait for the background version check and print update notice if needed."""
     if proc is None:
         return
-    if proc.poll() is None:
-        return  # still running, skip — don't delay exit
-    stdout = proc.stdout.read() if proc.stdout else b""
+    try:
+        stdout, _ = proc.communicate(timeout=_UPDATE_CHECK_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        return
     if proc.returncode != 0:
         return
     local_version = _get_local_version()
