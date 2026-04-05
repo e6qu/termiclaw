@@ -2,8 +2,10 @@
 
 import json
 import logging
+from unittest.mock import patch
 
-from termiclaw.logging import JsonFormatter, get_logger, setup_logging
+import termiclaw.logging as log_mod
+from termiclaw.logging import JsonFormatter, get_logger, log_dir, setup_logging
 
 
 def test_json_formatter_output():
@@ -160,6 +162,28 @@ def test_json_formatter_run_id_field_present():
     output = formatter.format(record)
     parsed = json.loads(output)
     assert "run_id" in parsed
+
+
+def test_log_dir_returns_path():
+    path = log_dir()
+    assert "termiclaw" in str(path)
+
+
+def test_setup_logging_creates_log_file(tmp_path):
+    logger = logging.getLogger("termiclaw")
+    logger.handlers.clear()
+    with patch.object(log_mod, "log_dir", return_value=tmp_path):
+        setup_logging("test-file-run")
+        logger.info("hello from test")
+        for h in logger.handlers:
+            h.flush()
+    log_file = tmp_path / "test-file-run.jsonl"
+    assert log_file.exists()
+    content = log_file.read_text()
+    assert "hello from test" in content
+    parsed = json.loads(content.strip().splitlines()[-1])
+    assert parsed["run_id"] == "test-file-run"
+    logger.handlers.clear()
 
 
 def test_log_levels():

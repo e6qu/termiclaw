@@ -1,4 +1,4 @@
-"""Structured JSONL logging to stderr."""
+"""Structured JSONL logging to stderr and log file."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import json
 import logging
 import sys
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import ClassVar
 
 
@@ -33,8 +34,15 @@ class JsonFormatter(logging.Formatter):
 _run_id: str = ""
 
 
+def log_dir() -> Path:
+    """Return the platform-appropriate log directory."""
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Logs" / "termiclaw"
+    return Path.home() / ".local" / "state" / "termiclaw" / "log"
+
+
 def setup_logging(run_id: str, level: int = logging.INFO) -> None:
-    """Configure root logger with JSON formatter on stderr."""
+    """Configure root logger with JSON formatter on stderr and log file."""
     global _run_id  # noqa: PLW0603
     _run_id = run_id
 
@@ -42,9 +50,21 @@ def setup_logging(run_id: str, level: int = logging.INFO) -> None:
     root.setLevel(level)
 
     if not root.handlers:
-        handler = logging.StreamHandler(sys.stderr)
-        handler.setFormatter(JsonFormatter())
-        root.addHandler(handler)
+        stderr_handler = logging.StreamHandler(sys.stderr)
+        stderr_handler.setFormatter(JsonFormatter())
+        root.addHandler(stderr_handler)
+
+        try:
+            log_path = log_dir()
+            log_path.mkdir(parents=True, exist_ok=True)
+            file_handler = logging.FileHandler(
+                log_path / f"{run_id}.jsonl",
+                encoding="utf-8",
+            )
+            file_handler.setFormatter(JsonFormatter())
+            root.addHandler(file_handler)
+        except OSError:
+            pass  # non-critical — stderr logging still works
 
 
 def get_logger(component: str) -> logging.Logger:
