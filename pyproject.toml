@@ -27,7 +27,7 @@ lint = [
     "ruff>=0.15.10",
 ]
 typecheck = [
-    "ty>=0.0.1a0",
+    "ty>=0.0.29",
 ]
 dev = [
     { include-group = "test" },
