@@ -7,6 +7,8 @@ Container-specific: every tmux call must be prefixed with
 import subprocess
 from unittest.mock import patch
 
+import pytest
+
 from termiclaw.container import (
     _find_max_chunk_size,
     _split_keys,
@@ -20,6 +22,7 @@ from termiclaw.container import (
     tail_bytes,
     truncate_output,
 )
+from termiclaw.errors import SessionDeadError
 
 _CID = "testcontainer"
 
@@ -192,10 +195,6 @@ def test_send_keys_text_passed_verbatim():
 
 def test_capture_visible_translates_calledprocesserror_to_sessiondead():
     """BUG-45 (extension): capture_visible also must translate."""
-    import pytest  # noqa: PLC0415
-
-    from termiclaw.errors import SessionDeadError  # noqa: PLC0415
-
     with patch("termiclaw.container.subprocess.run") as mock_run:
         mock_run.side_effect = subprocess.CalledProcessError(
             1,
@@ -208,10 +207,6 @@ def test_capture_visible_translates_calledprocesserror_to_sessiondead():
 
 def test_capture_full_history_translates_calledprocesserror_to_sessiondead():
     """BUG-45 (extension): capture_full_history also must translate."""
-    import pytest  # noqa: PLC0415
-
-    from termiclaw.errors import SessionDeadError  # noqa: PLC0415
-
     with patch("termiclaw.container.subprocess.run") as mock_run:
         mock_run.side_effect = subprocess.CalledProcessError(
             1,
@@ -228,10 +223,6 @@ def test_send_keys_translates_calledprocesserror_to_sessiondead():
     `except ContainerError:` catches it and the run fails cleanly
     rather than exploding with a traceback.
     """
-    import pytest  # noqa: PLC0415 — local import keeps top-level imports tidy
-
-    from termiclaw.errors import SessionDeadError  # noqa: PLC0415
-
     with patch("termiclaw.container.subprocess.run") as mock_run:
         mock_run.side_effect = subprocess.CalledProcessError(
             1,

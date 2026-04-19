@@ -9,7 +9,7 @@ from __future__ import annotations
 import subprocess as sp
 
 from termiclaw.agent import run
-from termiclaw.errors import ContainerProvisionError, ImageBuildError
+from termiclaw.errors import ContainerProvisionError, ImageBuildError, SessionDeadError
 from termiclaw.events import LoopTick
 from termiclaw.models import Config, ParsedCommand, ParseResult, PlannerUsage
 from termiclaw.result import Err, Ok
@@ -59,8 +59,6 @@ def test_run_send_and_wait_idle_error_marks_failed(tmp_path, tmp_db_path):
     no traceback escape, finally still tears down.
     """
     _ = tmp_db_path
-    from termiclaw.errors import SessionDeadError  # noqa: PLC0415
-
     container = FakeContainerPort(is_alive=True)
     container.alive_sequence.extend([True, True])
     container.incremental_outputs.extend([("$ ", "$ ")])

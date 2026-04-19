@@ -17,7 +17,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from termiclaw import agent_core, db, trajectory
+from termiclaw import agent_core, db, planner, trajectory
 from termiclaw.decide import DecideEffects, decide
 from termiclaw.errors import TermiclawError
 from termiclaw.events import (
@@ -101,8 +101,6 @@ def run(
     )
 
     holder = _StateHolder(state)
-    from termiclaw import planner  # noqa: PLC0415 — avoid circular import
-
     ports_resolved = ports or build_default_ports(
         config,
         conn,

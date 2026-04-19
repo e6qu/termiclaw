@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
-from termiclaw import agent_core, summarizer
+from termiclaw import agent_core, planner, summarizer
 from termiclaw.commands import (
     LogStepCmd,
     ObserveCmd,
@@ -350,8 +350,6 @@ def _on_artifacts_refresh_failed(
 
 def _build_planner_prompt(state: State, observation: str, config: Config) -> str:
     """Delegate to `planner.build_prompt` — pure."""
-    from termiclaw import planner  # noqa: PLC0415 — avoid cycle at module load
-
     _ = config
     return planner.build_prompt(
         state.instruction,
@@ -384,8 +382,6 @@ def _log_agent_step(
     task_complete: bool = False,
 ) -> StepRecord:
     """Compose an agent-source StepRecord with current token tally."""
-    from termiclaw import planner  # noqa: PLC0415 — avoid cycle at module load
-
     return StepRecord(
         step_id=effects.new_id(),
         timestamp=effects.now(),

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from unittest.mock import patch
 
+from termiclaw.db import init_db
 from termiclaw.models import Config, PlannerUsage, StepRecord
 from termiclaw.runtime import (
     DefaultArtifactsPort,
@@ -42,8 +44,6 @@ def test_default_container_port_provision_session_sleeps_after_provisioning():
     facade so tests using FakeContainerPort don't need to patch
     time.sleep. Lock that contract in.
     """
-    from unittest.mock import patch  # noqa: PLC0415 — only needed in this test
-
     port = DefaultContainerPort()
     call_order: list[str] = []
     with (
@@ -70,8 +70,6 @@ def test_default_persistence_port_roundtrips(tmp_db_path):
     _ = tmp_db_path
     conn = sqlite3.connect(str(tmp_db_path))
     # Manually create the schema via the real db module.
-    from termiclaw.db import init_db  # noqa: PLC0415 — isolate
-
     conn.close()
     conn = init_db(tmp_db_path)
     port = DefaultPersistencePort(conn)
@@ -130,8 +128,6 @@ def test_default_summarize_port_delegates_lifecycle():
 
 
 def test_build_default_ports_wires_everything(tmp_db_path):
-    from termiclaw.db import init_db  # noqa: PLC0415
-
     conn = init_db(tmp_db_path)
 
     def _query(_prompt: str) -> str:

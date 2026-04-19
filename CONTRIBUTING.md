@@ -33,6 +33,7 @@ Installed automatically by `pre-commit install`:
 | pre-commit | exhaustive-match | Forbids `case _:` in `termiclaw/decide.py` and `shell.py` (the sum-type dispatch cores) |
 | pre-commit | no-reserved-logrecord-keys | Forbids reserved `LogRecord` attribute names (`name`, `msg`, `args`, …) as keys in `extra=` dicts — collision crashes the logger (BUG-33) |
 | pre-commit | no-shlex-quote-in-argv | Forbids `shlex.quote(…)` under `termiclaw/` without `# shlex-quote-ok` — subprocess list-mode bypasses the shell so quoting injects literal quotes into the callee (BUG-15/42) |
+| pre-commit | no-inline-imports | Forbids `# noqa: PLC0415` — ruff already bans non-top-level imports; this closes the opt-out. Use `# lazy-import-ok` only if there's a genuine circular-import reason. |
 | commit-msg | conventional-pre-commit | Conventional commit format |
 | pre-push | pytest-unit | Unit tests with coverage |
 | pre-push | pytest-integration | Integration tests (requires Docker) |

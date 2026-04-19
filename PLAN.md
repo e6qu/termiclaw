@@ -45,6 +45,11 @@ Guards run in `.pre-commit-config.yaml` and fail the pre-commit stage:
   `# shlex-quote-ok` opt-in. Quoting inside a `subprocess.run([...])`
   list-mode call only injects literal quote characters into the
   callee's argv (see BUG-15, BUG-42).
+- **`scripts/check-no-inline-imports.sh`** — forbids `# noqa: PLC0415`
+  (ruff already bans non-top-level imports; noqa was the gap). All
+  imports live at module top so dependency shapes are visible at a
+  glance. If there's ever a genuine circular-import reason, tag with
+  `# lazy-import-ok`.
 - **Imports at top of file (ruff `PLC0415`)** — enforced everywhere,
   tests included. Move inline imports to the module header.
 - **No `Any`, no `object` in public signatures, no `type: ignore`

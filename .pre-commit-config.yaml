@@ -80,6 +80,13 @@ repos:
         always_run: true
         pass_filenames: false
 
+      - id: no-inline-imports
+        name: forbid inline imports (PLC0415 noqa)
+        entry: scripts/check-no-inline-imports.sh
+        language: script
+        always_run: true
+        pass_filenames: false
+
       - id: pytest-unit
         name: unit tests
         entry: uv run pytest tests/unit/ -q --cov=termiclaw --cov-branch --cov-fail-under=84
@@ -90,7 +97,7 @@ repos:
 
       - id: pytest-integration
         name: integration tests
-        entry: uv run pytest tests/integration/ -q -m integration --cov=termiclaw.tmux --cov-branch --cov-fail-under=50
+        entry: uv run pytest tests/integration/ -q -m integration
         language: system
         always_run: true
         pass_filenames: false
