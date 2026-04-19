@@ -4,7 +4,7 @@
 
 - Python 3.13+
 - [uv](https://docs.astral.sh/uv/) package manager
-- [tmux](https://github.com/tmux/tmux) (for integration tests)
+- [Docker](https://docs.docker.com/get-docker/) (daemon running — tmux runs inside the container, not on the host)
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (for end-to-end testing)
 
 ## Setup
@@ -28,22 +28,28 @@ Installed automatically by `pre-commit install`:
 | pre-commit | check-branch | Blocks commits on `main`, requires rebase on `origin/main` |
 | pre-commit | ruff, ruff-format | Lint and auto-format |
 | pre-commit | ty-check | Type checking |
+| pre-commit | no-object-signatures | Forbids `object` / `Any` in type annotations outside the boundary allowlist |
+| pre-commit | no-monkeypatch | Forbids pytest's `monkeypatch` fixture — refactor for real injection seams instead |
+| pre-commit | exhaustive-match | Forbids `case _:` in `termiclaw/decide.py` and `shell.py` (the sum-type dispatch cores) |
+| pre-commit | no-reserved-logrecord-keys | Forbids reserved `LogRecord` attribute names (`name`, `msg`, `args`, …) as keys in `extra=` dicts — collision crashes the logger (BUG-33) |
+| pre-commit | no-shlex-quote-in-argv | Forbids `shlex.quote(…)` under `termiclaw/` without `# shlex-quote-ok` — subprocess list-mode bypasses the shell so quoting injects literal quotes into the callee (BUG-15/42) |
+| pre-commit | no-inline-imports | Forbids `# noqa: PLC0415` — ruff already bans non-top-level imports; this closes the opt-out. Use `# lazy-import-ok` only if there's a genuine circular-import reason. |
 | commit-msg | conventional-pre-commit | Conventional commit format |
 | pre-push | pytest-unit | Unit tests with coverage |
-| pre-push | pytest-integration | Integration tests (requires tmux) |
+| pre-push | pytest-integration | Integration tests (requires Docker) |
 | pre-push | update-loc-badges | Updates code/test LOC badges in README |
 
 ## Running tests
 
 ```bash
 # Unit tests
-uv run pytest
+uv run pytest tests/unit/
 
-# Integration tests (requires tmux)
-uv run pytest tests/integration/ -m integration
+# Integration tests (requires Docker)
+uv run pytest tests/integration/ -m docker
 
 # With coverage
-uv run pytest --cov=termiclaw --cov-branch
+uv run pytest tests/unit/ --cov=termiclaw --cov-branch --cov-fail-under=84
 ```
 
 ## Linting and type checking
@@ -78,18 +84,39 @@ chore: bump ruff
 
 ## Architecture
 
-See [SPEC.md](SPEC.md) for the full specification.
+See [docs/DESIGN.md](docs/DESIGN.md) for the architectural comparison against Terminus; source in `termiclaw/` is authoritative.
 
 ```
 termiclaw/
-  cli.py            argparse, startup checks, list/show/status
-  agent.py          observe-decide-act loop
-  planner.py        claude -p invocation, JSON parsing, auto-fix
-  tmux.py           tmux subprocess wrapper
-  models.py         dataclasses (Config, RunState, ParseResult, etc.)
-  summarizer.py     three-subagent pipeline
-  trajectory.py     JSONL logging, run listing
-  logging.py        structured JSON formatter
+  cli.py              argparse, startup checks, subcommand dispatch
+  agent.py            top-level run() — thin shell over decide + apply
+  decide.py           pure decision core (Event → Transition)
+  shell.py            apply(cmd, ports) — dispatches side effects
+  ports.py            Protocols for container, planner, persistence, artifacts, summarize
+  runtime.py          default Ports impls (wraps container/db/planner/etc.)
+  state.py            frozen State, ForkContext, StallState, helpers
+  commands.py         Command sum type
+  events.py           Event sum type
+  transitions.py      Transition product type
+  agent_core.py       pure decision helpers (stall policy, formatters)
+  container.py        docker + tmux subprocess layer
+  planner.py          claude -p invocation + JSON parsing
+  summarizer.py       three-subagent summarization
+  summarize_worker.py async background wrapper
+  artifacts.py        STATUS/DO_NEXT/WHAT_WE_DID/PLAN markdown refresh
+  db.py               SQLite: runs, steps, MCTS, failure tags
+  trajectory.py       JSONL trajectory log
+  atif.py             ATIF v1.6 export
+  mcts.py             Monte-Carlo Tree Search over forks
+  verifier.py         task verifier (bash exit-code)
+  tagging.py          FailureCategory enum
+  task_file.py        TOML task loader
+  validate.py         JSON boundary validators (Result[T, ParseError])
+  errors.py           TermiclawError hierarchy
+  result.py           Ok[T] | Err[E]
+  models.py           Config, ParsedCommand, ParseResult, StepRecord, RunInfo, PlannerUsage
+  stall.py            stall detection (pure)
+  logging.py          JSON structured logger
 ```
 
 Zero runtime dependencies. Dev: pytest, pytest-cov, ruff, ty, pre-commit.

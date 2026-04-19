@@ -34,17 +34,16 @@ jobs:
 
       - run: uv sync --all-groups
 
-      - name: ruff check
-        run: uv run ruff check .
-
-      - name: ruff format
-        run: uv run ruff format --check .
-
-      - name: ty check
-        run: uv run ty check
-
-      - name: shellcheck
-        run: shellcheck scripts/*.sh
+      # Single source of truth: every lint rule is defined in
+      # `.pre-commit-config.yaml`, so CI runs exactly what devs run
+      # locally. SKIP covers pre-push-stage hooks (pytest, LOC
+      # badges) which have dedicated CI jobs below, plus the
+      # check-branch hook which is only meaningful in a local
+      # working copy.
+      - name: pre-commit
+        env:
+          SKIP: check-branch,pytest-unit,pytest-integration,update-loc-badges
+        run: uv run pre-commit run --all-files --show-diff-on-failure
 
   test:
     runs-on: ubuntu-latest
@@ -65,7 +64,7 @@ jobs:
       - name: Unit tests
         run: uv run pytest tests/unit/ -v --cov=termiclaw --cov-report=term-missing --cov-branch --cov-fail-under=84
 
-  integration:
+  docker-integration:
     runs-on: ubuntu-latest
     needs: test
     steps:
@@ -79,10 +78,8 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Install tmux
-        run: sudo apt-get install -y tmux
-
+      - run: docker info
       - run: uv sync --all-groups
 
-      - name: Integration tests
-        run: uv run pytest tests/integration/ -v -m integration --cov=termiclaw.tmux --cov-report=term-missing --cov-branch --cov-fail-under=50
+      - name: Container integration tests
+        run: uv run pytest tests/integration/ -v -m docker --cov=termiclaw.container --cov-report=term-missing --cov-branch --cov-fail-under=50

@@ -10,38 +10,48 @@ import pytest
 
 from termiclaw.cli import (
     _attach,
+    _build_fork_seed,
     _check_claude,
-    _check_tmux,
+    _check_docker,
+    _eval,
+    _export,
+    _export_one,
+    _failures,
     _finish_update_check,
     _get_local_version,
     _list_runs,
+    _mcts,
     _parse_latest_tag,
     _print_run_header,
     _print_trajectory,
+    _read_parent_artifacts,
     _resolve_run_dir,
+    _resolve_since,
     _run,
     _show,
     _start_update_check,
     _status,
+    _tag,
     _version_tuple,
+    main,
 )
+from termiclaw.db import failure_histogram, init_db, insert_failure_tag, insert_run
 from termiclaw.models import RunInfo
+from termiclaw.state import State
 
-# --- Startup checks ---
 
-
-def test_check_tmux_present():
+def test_check_docker_present():
     with patch("termiclaw.cli.subprocess.run") as mock_run:
         mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0)
-        _check_tmux()
+        _check_docker()
 
 
-def test_check_tmux_missing():
+def test_check_docker_missing():
     with (
         patch("termiclaw.cli.subprocess.run", side_effect=FileNotFoundError),
         pytest.raises(SystemExit),
     ):
-        _check_tmux()
+        _check_docker()
 
 
 def test_check_claude_present():
@@ -58,15 +68,15 @@ def test_check_claude_missing():
         _check_claude()
 
 
-def test_check_tmux_command_fails():
+def test_check_docker_command_fails():
     with (
         patch(
             "termiclaw.cli.subprocess.run",
-            side_effect=subprocess.CalledProcessError(1, "tmux"),
+            side_effect=subprocess.CalledProcessError(1, "docker"),
         ),
         pytest.raises(SystemExit),
     ):
-        _check_tmux()
+        _check_docker()
 
 
 def test_check_claude_command_fails():
@@ -80,37 +90,51 @@ def test_check_claude_command_fails():
         _check_claude()
 
 
-# --- run ---
+def _run_args(**overrides: object) -> argparse.Namespace:
+    defaults: dict[str, object] = {
+        "instruction": None,
+        "task": None,
+        "max_turns": 10,
+        "keep_session": False,
+        "runs_dir": "./runs",
+        "verbose": False,
+        "docker_network": "bridge",
+    }
+    defaults.update(overrides)
+    return argparse.Namespace(**defaults)
 
 
 def test_run_task_file_not_found():
-    args = argparse.Namespace(
-        instruction=None,
-        task="/nonexistent/path/task.txt",
-        max_turns=10,
-        keep_session=False,
-        runs_dir="./runs",
-        verbose=False,
-    )
+    args = _run_args(task="/nonexistent/path/task.txt")
     with (
-        patch("termiclaw.cli._check_tmux"),
+        patch("termiclaw.cli._check_docker"),
         patch("termiclaw.cli._check_claude"),
         pytest.raises(SystemExit),
     ):
         _run(args)
 
 
-def test_run_no_instruction():
-    args = argparse.Namespace(
-        instruction=None,
-        task=None,
-        max_turns=10,
-        keep_session=False,
-        runs_dir="./runs",
-        verbose=False,
-    )
+def test_run_task_file_non_utf8_clean_exit(tmp_path, capsys):
+    """BUG-44: `--task <file>` with non-UTF-8 content exits cleanly, no traceback."""
+    bad = tmp_path / "bad.txt"
+    bad.write_bytes(b"hello\xc3\x28 world")  # invalid UTF-8 continuation
+    args = _run_args(task=str(bad))
     with (
-        patch("termiclaw.cli._check_tmux"),
+        patch("termiclaw.cli._check_docker"),
+        patch("termiclaw.cli._check_claude"),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        _run(args)
+    assert exc_info.value.code == 1
+    err = capsys.readouterr().err
+    assert "not readable as UTF-8" in err
+    assert str(bad) in err
+
+
+def test_run_no_instruction():
+    args = _run_args()
+    with (
+        patch("termiclaw.cli._check_docker"),
         patch("termiclaw.cli._check_claude"),
         pytest.raises(SystemExit),
     ):
@@ -118,16 +142,9 @@ def test_run_no_instruction():
 
 
 def test_run_with_instruction():
-    args = argparse.Namespace(
-        instruction="do stuff",
-        task=None,
-        max_turns=10,
-        keep_session=False,
-        runs_dir="./runs",
-        verbose=False,
-    )
+    args = _run_args(instruction="do stuff")
     with (
-        patch("termiclaw.cli._check_tmux"),
+        patch("termiclaw.cli._check_docker"),
         patch("termiclaw.cli._check_claude"),
         patch("termiclaw.cli.agent") as mock_agent,
     ):
@@ -140,45 +157,49 @@ def test_run_with_instruction():
         mock_agent.run.assert_called_once()
         config = mock_agent.run.call_args[0][0]
         assert config.instruction == "do stuff"
+        assert config.docker_network == "bridge"
 
 
-# --- attach ---
-
-
-def test_attach_session_not_found():
+def test_attach_run_not_found():
     args = argparse.Namespace(run_id="nonexistent123")
     with (
-        patch("termiclaw.cli.tmux.is_session_alive", return_value=False),
-        patch(
-            "termiclaw.cli.subprocess.run",
-            return_value=subprocess.CompletedProcess(
-                args=[],
-                returncode=1,
-                stdout="",
-                stderr="",
-            ),
-        ),
+        patch("termiclaw.cli._check_docker"),
+        patch("termiclaw.cli.db.init_db"),
+        patch("termiclaw.cli.db.get_run", return_value=None),
         pytest.raises(SystemExit),
     ):
         _attach(args)
 
 
-def test_attach_exact_match():
+def test_attach_container_alive():
     args = argparse.Namespace(run_id="abc12345")
+    run_info = RunInfo(
+        run_id="abc12345xxx",
+        instruction="x",
+        status="active",
+        total_steps=1,
+        started_at="t",
+        finished_at="",
+        tmux_session="termiclaw-abc12345",
+        termination_reason="",
+        prompt_tokens=0,
+        duration="-",
+        container_id="cid123",
+    )
     with (
-        patch("termiclaw.cli.tmux.is_session_alive", return_value=True),
-        patch("termiclaw.cli.tmux.attach_session") as mock_attach,
+        patch("termiclaw.cli._check_docker"),
+        patch("termiclaw.cli.db.init_db"),
+        patch("termiclaw.cli.db.get_run", return_value=run_info),
+        patch("termiclaw.cli.container.is_session_alive", return_value=True),
+        patch("termiclaw.cli.container.attach") as mock_attach,
     ):
         _attach(args)
-        mock_attach.assert_called_once_with("termiclaw-abc12345")
-
-
-# --- list ---
+        mock_attach.assert_called_once_with("cid123", "termiclaw-abc12345")
 
 
 def test_list_runs_empty(tmp_path):
     args = argparse.Namespace(runs_dir=str(tmp_path))
-    _list_runs(args)  # should print "No runs found." to stderr
+    _list_runs(args)
 
 
 def test_list_runs_with_data(tmp_path):
@@ -192,7 +213,7 @@ def test_list_runs_with_data(tmp_path):
             finished_at="2026-04-05T00:01:00Z",
             tmux_session="t",
             termination_reason="done",
-            prompt_chars=5000,
+            prompt_tokens=5000,
             duration="1m 0s",
         ),
     ]
@@ -213,16 +234,13 @@ def test_list_runs_truncates_instruction(tmp_path):
             finished_at="t",
             tmux_session="t",
             termination_reason="done",
-            prompt_chars=0,
+            prompt_tokens=0,
             duration="-",
         ),
     ]
     args = argparse.Namespace(runs_dir=str(tmp_path))
     with patch("termiclaw.cli.trajectory.list_runs", return_value=mock_runs):
         _list_runs(args)
-
-
-# --- show ---
 
 
 def test_resolve_run_dir_not_found(tmp_path):
@@ -263,7 +281,7 @@ def test_print_run_header(tmp_path):
 
 
 def test_print_run_header_no_file(tmp_path):
-    _print_run_header(tmp_path)  # should not raise
+    _print_run_header(tmp_path)
 
 
 def test_print_trajectory(tmp_path):
@@ -289,7 +307,7 @@ def test_print_trajectory(tmp_path):
 
 
 def test_print_trajectory_no_file(tmp_path):
-    _print_trajectory(tmp_path)  # should print "No trajectory found."
+    _print_trajectory(tmp_path)
 
 
 def test_show(tmp_path):
@@ -301,9 +319,6 @@ def test_show(tmp_path):
     )
     args = argparse.Namespace(runs_dir=str(tmp_path), run_id="abc")
     _show(args)
-
-
-# --- status ---
 
 
 def test_status_authenticated():
@@ -375,7 +390,7 @@ def test_status_with_runs():
             finished_at="t",
             tmux_session="t",
             termination_reason="done",
-            prompt_chars=1000,
+            prompt_tokens=1000,
             duration="10s",
         ),
         RunInfo(
@@ -387,7 +402,7 @@ def test_status_with_runs():
             finished_at="t",
             tmux_session="t",
             termination_reason="err",
-            prompt_chars=500,
+            prompt_tokens=500,
             duration="5s",
         ),
     ]
@@ -402,9 +417,6 @@ def test_status_with_runs():
             stderr="",
         )
         _status(argparse.Namespace(runs_dir="./termiclaw_runs"))
-
-
-# --- Version check ---
 
 
 def test_version_tuple():
@@ -433,7 +445,7 @@ def test_parse_latest_tag_no_match():
 
 def test_get_local_version():
     v = _get_local_version()
-    assert v  # should return something since termiclaw is installed
+    assert v
 
 
 def test_start_update_check():
@@ -444,7 +456,7 @@ def test_start_update_check():
 
 
 def test_finish_update_check_none():
-    _finish_update_check(None)  # should not raise
+    _finish_update_check(None)
 
 
 def test_finish_update_check_no_update(capsys):
@@ -471,3 +483,306 @@ def test_finish_update_check_timeout():
     mock_proc.communicate.side_effect = subprocess.TimeoutExpired(cmd="git", timeout=2)
     _finish_update_check(mock_proc)
     mock_proc.kill.assert_called_once()
+
+
+def test_resolve_since_days_suffix():
+    iso = _resolve_since("7d")
+    assert "T" in iso or "-" in iso
+
+
+def test_resolve_since_passthrough():
+    assert _resolve_since("2026-04-01T00:00:00+00:00") == "2026-04-01T00:00:00+00:00"
+
+
+def test_export_one_writes_valid_json(tmp_path):
+    run_id = "r1"
+    run_dir = tmp_path / run_id
+    run_dir.mkdir()
+    (run_dir / "run.json").write_text(
+        json.dumps(
+            {
+                "run_id": run_id,
+                "instruction": "t",
+                "started_at": "s",
+                "status": "succeeded",
+            },
+        ),
+    )
+    out_path = tmp_path / "out.json"
+    _export_one(run_id, tmp_path, out_path)
+    data = json.loads(out_path.read_text())
+    assert data["schema_version"] == "1.6"
+    assert data["run_id"] == run_id
+
+
+def test_tag_rejects_unknown_category():
+    args = argparse.Namespace(
+        run_id="nope",
+        category="bogus_cat",
+        step=None,
+        note=None,
+    )
+    with pytest.raises(SystemExit):
+        _tag(args)
+
+
+def test_failures_empty(capsys, tmp_db_path):
+    _ = tmp_db_path
+    args = argparse.Namespace(since=None)
+    _failures(args)
+    captured = capsys.readouterr()
+    assert "No failure tags" in captured.err
+
+
+def test_failures_histogram(capsys, tmp_db_path):
+    conn = init_db(tmp_db_path)
+    insert_failure_tag(
+        conn,
+        run_id="a",
+        category="stuck_loop",
+        step_index=None,
+        note=None,
+        tagged_at="2026-04-19T00:00:00+00:00",
+    )
+    conn.close()
+    args = argparse.Namespace(since=None)
+    _failures(args)
+    captured = capsys.readouterr()
+    assert "stuck_loop" in captured.err
+    assert "TOTAL" in captured.err
+
+
+def test_failures_since_filter(tmp_db_path, capsys):
+    conn = init_db(tmp_db_path)
+    insert_failure_tag(
+        conn,
+        run_id="r",
+        category="stuck_loop",
+        step_index=None,
+        note=None,
+        tagged_at="2010-01-01T00:00:00+00:00",
+    )
+    conn.close()
+    args = argparse.Namespace(since="1d")
+    _failures(args)
+    assert "No failure tags" in capsys.readouterr().err
+
+
+def test_tag_inserts(tmp_db_path):
+    conn = init_db(tmp_db_path)
+    insert_run(
+        conn,
+        State(
+            run_id="abc12345",
+            instruction="x",
+            tmux_session="t",
+            started_at="2026-04-19T00:00:00+00:00",
+            status="failed",
+        ),
+    )
+    conn.close()
+    args = argparse.Namespace(
+        run_id="abc",
+        category="stuck_loop",
+        step=None,
+        note="slow",
+    )
+    _tag(args)
+    conn = init_db(tmp_db_path)
+    hist = failure_histogram(conn)
+    assert hist == [("stuck_loop", 1)]
+    conn.close()
+
+
+def test_tag_rejects_missing_run(tmp_db_path):
+    _ = tmp_db_path
+    args = argparse.Namespace(
+        run_id="nope",
+        category="stuck_loop",
+        step=None,
+        note=None,
+    )
+    with pytest.raises(SystemExit):
+        _tag(args)
+
+
+def test_export_missing_run_id_without_all():
+    args = argparse.Namespace(
+        all=False,
+        run_id=None,
+        out=None,
+        format="atif",
+        runs_dir="./runs",
+    )
+    with pytest.raises(SystemExit):
+        _export(args)
+
+
+def test_export_all_no_runs(tmp_path, capsys):
+    args = argparse.Namespace(
+        all=True,
+        run_id=None,
+        out=str(tmp_path / "out"),
+        format="atif",
+        runs_dir=str(tmp_path),
+    )
+    _export(args)
+    captured = capsys.readouterr()
+    assert "No runs found" in captured.err
+
+
+def test_export_one_explicit_run(tmp_path, tmp_db_path):
+    _ = tmp_db_path
+    run_id = "run_xyz"
+    run_dir = Path(tmp_path) / run_id
+    run_dir.mkdir()
+    (run_dir / "run.json").write_text(
+        json.dumps(
+            {"run_id": run_id, "instruction": "t", "started_at": "s", "status": "succeeded"},
+        ),
+    )
+    args = argparse.Namespace(
+        all=False,
+        run_id=run_id,
+        out=None,
+        format="atif",
+        runs_dir=str(tmp_path),
+    )
+    _export(args)
+    atif_path = run_dir / f"{run_id}.atif.json"
+    assert atif_path.exists()
+    data = json.loads(atif_path.read_text())
+    assert data["schema_version"] == "1.6"
+
+
+def test_build_fork_seed_composes_artifacts():
+    artifacts = {
+        "WHAT_WE_DID.md": "did things",
+        "STATUS.md": "in progress",
+        "DO_NEXT.md": "next steps",
+        "PLAN.md": "the plan",
+    }
+    seed = _build_fork_seed("continue it", artifacts)
+    assert "continue it" in seed
+    assert "did things" in seed
+    assert "in progress" in seed
+    assert "next steps" in seed
+    assert "the plan" in seed
+
+
+def test_read_parent_artifacts_missing(tmp_path):
+    result = _read_parent_artifacts(tmp_path)
+    assert result == {
+        "WHAT_WE_DID.md": "",
+        "STATUS.md": "",
+        "DO_NEXT.md": "",
+        "PLAN.md": "",
+    }
+
+
+def test_read_parent_artifacts_present(tmp_path):
+    artifacts_dir = tmp_path / "artifacts"
+    artifacts_dir.mkdir()
+    (artifacts_dir / "WHAT_WE_DID.md").write_text("did")
+    (artifacts_dir / "STATUS.md").write_text("sta")
+    (artifacts_dir / "DO_NEXT.md").write_text("nxt")
+    (artifacts_dir / "PLAN.md").write_text("pln")
+    result = _read_parent_artifacts(tmp_path)
+    assert result == {
+        "WHAT_WE_DID.md": "did",
+        "STATUS.md": "sta",
+        "DO_NEXT.md": "nxt",
+        "PLAN.md": "pln",
+    }
+
+
+def test_main_no_command_prints_help(capsys):
+    with pytest.raises(SystemExit):
+        main([])
+    captured = capsys.readouterr()
+    assert "termiclaw" in (captured.out + captured.err)
+
+
+def test_main_list_dispatches(tmp_path):
+    main(["list", "--runs-dir", str(tmp_path)])
+
+
+def test_main_failures_dispatches(tmp_db_path):
+    _ = tmp_db_path
+    main(["failures"])
+
+
+def test_main_mcts_show_dispatches(tmp_db_path, capsys):
+    _ = tmp_db_path
+    with pytest.raises(SystemExit):
+        main(["mcts-show", "does_not_exist"])
+    assert "No MCTS search" in capsys.readouterr().err
+
+
+def test_main_export_without_run_id_fails(tmp_db_path):
+    _ = tmp_db_path
+    with pytest.raises(SystemExit):
+        main(["export"])
+
+
+def test_eval_no_tasks(tmp_path, capsys):
+    tasks_dir = tmp_path / "tasks"
+    tasks_dir.mkdir()
+    args = argparse.Namespace(
+        tasks_dir=str(tasks_dir),
+        repeat=1,
+        parallelism=1,
+        runs_dir="./runs",
+        verbose=False,
+        docker_network="bridge",
+        max_turns=5,
+    )
+    _eval(args)
+    assert "No task files" in capsys.readouterr().err
+
+
+def test_eval_invalid_tasks_dir(tmp_path, capsys):
+    args = argparse.Namespace(
+        tasks_dir=str(tmp_path / "nope"),
+        repeat=1,
+        parallelism=1,
+        runs_dir="./runs",
+        verbose=False,
+        docker_network="bridge",
+        max_turns=5,
+    )
+    with pytest.raises(SystemExit):
+        _eval(args)
+    assert "Error:" in capsys.readouterr().err
+
+
+def test_mcts_missing_task_file(tmp_path, capsys):
+    args = argparse.Namespace(
+        task=str(tmp_path / "does_not_exist.toml"),
+        playouts=1,
+        parallelism=1,
+        expansion_depth=1,
+        runs_dir="./runs",
+        verbose=False,
+        docker_network="bridge",
+    )
+    with pytest.raises(SystemExit):
+        _mcts(args)
+    assert "Error:" in capsys.readouterr().err
+
+
+def test_mcts_task_without_verifier(tmp_path, capsys):
+    task_path = tmp_path / "task.toml"
+    task_path.write_text('name = "t"\ninstruction = "do something"\n')
+    args = argparse.Namespace(
+        task=str(task_path),
+        playouts=1,
+        parallelism=1,
+        expansion_depth=1,
+        runs_dir="./runs",
+        verbose=False,
+        docker_network="bridge",
+    )
+    with pytest.raises(SystemExit):
+        _mcts(args)
+    assert "verifier" in capsys.readouterr().err.lower()

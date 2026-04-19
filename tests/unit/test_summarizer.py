@@ -1,13 +1,12 @@
 """Tests for termiclaw.summarizer."""
 
+import pytest
+
 from termiclaw.models import ParsedCommand, StepRecord
 from termiclaw.summarizer import (
     format_steps_text,
-    run_fallback,
-    run_short_summarization,
     run_summarization,
     should_summarize,
-    summarize_with_fallback,
 )
 
 
@@ -52,53 +51,15 @@ def test_run_summarization_returns_summary_and_qa():
     assert "A1" in qa
 
 
-def test_run_short_summarization():
-    def mock_query(prompt):
-        return "short summary"
-
-    summary, qa = run_short_summarization("task", "screen output", mock_query)
-    assert summary == "short summary"
-    assert qa == ""
-
-
-def test_run_fallback_no_llm():
-    summary, qa = run_fallback("fix bug", "terminal output here")
-    assert "fix bug" in summary
-    assert "terminal output here" in summary
-    assert qa == ""
-
-
-def test_summarize_with_fallback_success():
-    def mock_query(_prompt):
-        return "ok"
-
-    summary, _qa = summarize_with_fallback("task", "recent", "full", "screen", mock_query)
-    assert summary == "ok"
-
-
-def test_summarize_with_fallback_full_fails():
-    call_count = 0
+def test_run_summarization_propagates_failure():
+    """Principle #6: no fallback chain. Any failure propagates."""
 
     def mock_query(_prompt):
-        nonlocal call_count
-        call_count += 1
-        if call_count <= 1:
-            msg = "fail on first call (inside full summarization)"
-            raise RuntimeError(msg)
-        return "short summary"
-
-    summary, _qa = summarize_with_fallback("task", "recent", "full", "screen", mock_query)
-    assert summary == "short summary"
-
-
-def test_summarize_with_fallback_all_fail():
-    def mock_query(_prompt):
-        msg = "always fail"
+        msg = "planner failed"
         raise RuntimeError(msg)
 
-    summary, _qa = summarize_with_fallback("task", "recent", "full", "screen", mock_query)
-    assert "task" in summary
-    assert _qa == ""
+    with pytest.raises(RuntimeError, match="planner failed"):
+        run_summarization("task", "recent", "full", "screen", mock_query)
 
 
 def test_format_steps_text():

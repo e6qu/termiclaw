@@ -16,3 +16,6 @@ wheels/
 # Run output
 termiclaw_runs/
 .coverage
+
+# Claude Code local state
+.claude/

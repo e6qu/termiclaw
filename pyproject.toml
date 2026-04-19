@@ -1,6 +1,6 @@
 [project]
 name = "termiclaw"
-version = "0.8.0"
+version = "1.4.0"
 description = "Terminus-style terminal agent using Claude Code and tmux"
 requires-python = ">=3.13"
 license = "AGPL-3.0-or-later"
@@ -39,8 +39,8 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-addopts = "-m 'not integration'"
-markers = ["integration: requires real tmux"]
+addopts = "-m 'not docker'"
+markers = ["docker: requires Docker daemon for real-container integration"]
 
 [tool.coverage.run]
 source = ["termiclaw"]
@@ -63,7 +63,7 @@ line-length = 100
 [tool.ruff.lint]
 select = [
     "A",      # flake8-builtins
-    "ANN",    # flake8-annotations
+    "ANN",    # flake8-annotations (incl. ANN401: no Any)
     "ARG",    # flake8-unused-arguments
     "B",      # flake8-bugbear
     "BLE",    # flake8-blind-except
@@ -74,10 +74,14 @@ select = [
     "EM",     # flake8-errmsg
     "ERA",    # flake8-eradicate
     "F",      # pyflakes
+    "FA",     # flake8-future-annotations (force `from __future__ import annotations`)
     "FBT",    # flake8-boolean-trap
+    "FURB",   # refurb (modernization)
+    "G",      # flake8-logging-format (no f-string in log messages)
     "I",      # isort
     "ICN",    # flake8-import-conventions
     "ISC",    # flake8-implicit-str-concat
+    "LOG",    # flake8-logging
     "N",      # pep8-naming
     "PGH",    # pygrep-hooks
     "PIE",    # flake8-pie
@@ -91,7 +95,7 @@ select = [
     "SIM",    # flake8-simplify
     "SLF",    # flake8-self
     "T20",    # flake8-print
-    "TCH",    # flake8-type-checking
+    "TC",     # flake8-type-checking (replaces deprecated TCH)
     "TID",    # flake8-tidy-imports
     "TRY",    # tryceratops
     "UP",     # pyupgrade
@@ -99,18 +103,24 @@ select = [
     "YTT",    # flake8-2020
 ]
 
+[tool.ruff.lint.flake8-type-checking]
+strict = true
+
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = [
     "S101",    # assert allowed in tests
     "ANN",     # annotations not required in tests
     "ARG",     # unused args common in fixtures
     "PLR2004", # magic values in tests are fine
+    "S603",    # subprocess calls in tests are intentional
+    "S607",    # partial executable paths (docker, tmux) are intentional
 ]
 "termiclaw/planner.py" = ["S603", "S607"]
 "termiclaw/db.py" = ["PLR0913"]
 "termiclaw/agent.py" = ["PLR0913"]
-"termiclaw/tmux.py" = ["S603", "S607"]
+"termiclaw/container.py" = ["S603", "S607"]
 "termiclaw/cli.py" = ["S603", "S607"]
+"termiclaw/verifier.py" = ["S603", "S607"]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 10

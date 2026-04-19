@@ -10,7 +10,8 @@ from typing import TYPE_CHECKING
 from termiclaw.models import RunInfo
 
 if TYPE_CHECKING:
-    from termiclaw.models import RunState, StepRecord
+    from termiclaw.models import StepRecord
+    from termiclaw.state import State
 
 
 def read_trajectory_text(run_dir: Path, *, max_chars: int = 50_000) -> str:
@@ -68,7 +69,7 @@ def append_step(run_dir: Path, step: StepRecord) -> None:
 
 def write_run_metadata(
     run_dir: Path,
-    state: RunState,
+    state: State,
     *,
     finished_at: str | None = None,
     termination_reason: str | None = None,
@@ -152,7 +153,7 @@ def list_runs(runs_dir: str) -> list[RunInfo]:
             finished_at=finished,
             tmux_session=str(meta.get("tmux_session", "")),
             termination_reason=str(meta.get("termination_reason", "")),
-            prompt_chars=_sum_prompt_chars(entry),
+            prompt_tokens=_sum_prompt_tokens(entry),
             duration=_format_duration(started, finished),
         )
         results.append(info)
@@ -160,8 +161,8 @@ def list_runs(runs_dir: str) -> list[RunInfo]:
     return results
 
 
-def _sum_prompt_chars(run_dir: Path) -> int:
-    """Sum prompt_chars from all trajectory steps."""
+def _sum_prompt_tokens(run_dir: Path) -> int:
+    """Sum prompt_tokens from all trajectory steps."""
     trajectory_path = run_dir / "trajectory.jsonl"
     if not trajectory_path.exists():
         return 0
@@ -171,7 +172,7 @@ def _sum_prompt_chars(run_dir: Path) -> int:
             entry = json.loads(line)
             metrics = entry.get("metrics", {})
             if isinstance(metrics, dict):
-                total += int(metrics.get("prompt_chars", 0))
+                total += int(metrics.get("prompt_tokens", 0))
         except (json.JSONDecodeError, TypeError, ValueError):
             continue
     return total

@@ -20,7 +20,6 @@ repos:
     rev: v0.11.0
     hooks:
       - id: shellcheck
-        args: [--severity=warning]
 
   - repo: https://github.com/compilerla/conventional-pre-commit
     rev: v4.4.0
@@ -45,6 +44,48 @@ repos:
         types: [python]
         pass_filenames: false
 
+      - id: no-object-signatures
+        name: forbid object/Any in public signatures
+        entry: scripts/check-no-object-in-signatures.sh
+        language: script
+        types: [python]
+        pass_filenames: false
+
+      - id: no-monkeypatch
+        name: forbid pytest monkeypatch usage
+        entry: scripts/check-no-monkeypatch.sh
+        language: script
+        always_run: true
+        pass_filenames: false
+
+      - id: exhaustive-match
+        name: forbid `case _:` in decide/shell
+        entry: scripts/check-exhaustive-match.sh
+        language: script
+        always_run: true
+        pass_filenames: false
+
+      - id: no-reserved-logrecord-keys
+        name: forbid LogRecord-reserved keys in log extra= dicts
+        entry: scripts/check-log-reserved-names.sh
+        language: script
+        always_run: true
+        pass_filenames: false
+
+      - id: no-shlex-quote-in-argv
+        name: forbid shlex.quote in subprocess argv list mode
+        entry: scripts/check-no-shlex-quote-in-argv.sh
+        language: script
+        always_run: true
+        pass_filenames: false
+
+      - id: no-inline-imports
+        name: forbid inline imports (PLC0415 noqa)
+        entry: scripts/check-no-inline-imports.sh
+        language: script
+        always_run: true
+        pass_filenames: false
+
       - id: pytest-unit
         name: unit tests
         entry: uv run pytest tests/unit/ -q --cov=termiclaw --cov-branch --cov-fail-under=84
@@ -55,7 +96,7 @@ repos:
 
       - id: pytest-integration
         name: integration tests
-        entry: uv run pytest tests/integration/ -q -m integration --cov=termiclaw.tmux --cov-branch --cov-fail-under=50
+        entry: uv run pytest tests/integration/ -q -m docker
         language: system
         always_run: true
         pass_filenames: false

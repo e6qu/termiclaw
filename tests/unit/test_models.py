@@ -2,7 +2,10 @@
 
 import dataclasses
 
-from termiclaw.models import Config, ParsedCommand, ParseResult, RunState, StepRecord
+import pytest
+
+from termiclaw.models import Config, ParsedCommand, ParseResult, StepRecord
+from termiclaw.state import State
 
 
 def test_parsed_command_frozen():
@@ -10,7 +13,8 @@ def test_parsed_command_frozen():
     assert cmd.keystrokes == "ls\n"
     assert cmd.duration == 0.5
     assert dataclasses.is_dataclass(cmd)
-    assert ParsedCommand.__dataclass_params__.frozen  # type: ignore[attr-defined]
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        setattr(cmd, "keystrokes", "other")  # noqa: B010
 
 
 def test_parse_result_defaults():
@@ -36,36 +40,32 @@ def test_parse_result_with_commands():
     assert result.commands[0].keystrokes == "echo hi\n"
 
 
-def test_run_state_mutable():
-    state = RunState(
+def test_state_frozen():
+    state = State(
         run_id="abc",
         instruction="do stuff",
         tmux_session="termiclaw-abc",
         started_at="2026-04-05T00:00:00Z",
-        status="pending",
+        status="active",
     )
     assert state.current_step == 0
-    state.current_step = 5
-    assert state.current_step == 5
-    state.status = "active"
-    assert state.status == "active"
-    state.pending_completion = True
-    assert state.pending_completion is True
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        setattr(state, "current_step", 5)  # noqa: B010
 
 
-def test_run_state_defaults():
-    state = RunState(
+def test_state_defaults():
+    state = State(
         run_id="abc",
         instruction="x",
         tmux_session="t",
         started_at="t",
-        status="pending",
+        status="active",
     )
     assert state.max_turns == 1_000_000
     assert state.previous_buffer == ""
     assert state.summary is None
     assert state.qa_context is None
-    assert state.total_prompt_chars == 0
+    assert state.total_prompt_tokens == 0
 
 
 def test_step_record_frozen():
@@ -79,7 +79,8 @@ def test_step_record_frozen():
     assert step.commands == ()
     assert step.metrics == ()
     assert step.is_copied_context is False
-    assert StepRecord.__dataclass_params__.frozen  # type: ignore[attr-defined]
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        setattr(step, "step_id", "other")  # noqa: B010
 
 
 def test_step_record_with_data():
@@ -93,7 +94,7 @@ def test_step_record_with_data():
         plan="run ls",
         commands=(cmd,),
         task_complete=True,
-        metrics=(("prompt_chars", 1500), ("duration_ms", 3200)),
+        metrics=(("prompt_tokens", 1500), ("duration_ms", 3200)),
     )
     assert step.analysis == "looks good"
     assert step.task_complete is True
@@ -109,11 +110,10 @@ def test_config_defaults():
     assert cfg.history_limit == 10_000_000
     assert cfg.max_output_bytes == 10_000
     assert cfg.max_command_length == 16_000
-    assert cfg.max_duration == 60.0
     assert cfg.min_delay == 0.1
     assert cfg.planner_timeout == 300
     assert cfg.planner_retries == 3
-    assert cfg.summarization_threshold == 100_000
+    assert cfg.summarization_token_threshold == 25_000
     assert cfg.keep_session is False
     assert cfg.runs_dir == "./termiclaw_runs"
 
@@ -140,16 +140,18 @@ def test_config_verbose_true():
     assert cfg.verbose is True
 
 
-def test_run_state_recent_steps_default():
-    state = RunState(
+def test_state_recent_steps_default():
+    state = State(
         run_id="abc",
         instruction="x",
         tmux_session="t",
         started_at="t",
-        status="pending",
+        status="active",
     )
-    assert state.recent_steps == []
+    assert state.recent_steps == ()
 
 
 def test_config_frozen():
-    assert Config.__dataclass_params__.frozen  # type: ignore[attr-defined]
+    cfg = Config(instruction="x")
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        setattr(cfg, "instruction", "y")  # noqa: B010
