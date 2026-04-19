@@ -97,7 +97,7 @@ repos:
 
       - id: pytest-integration
         name: integration tests
-        entry: uv run pytest tests/integration/ -q -m integration
+        entry: uv run pytest tests/integration/ -q -m docker
         language: system
         always_run: true
         pass_filenames: false
