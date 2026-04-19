@@ -34,17 +34,16 @@ jobs:
 
       - run: uv sync --all-groups
 
-      - name: ruff check
-        run: uv run ruff check .
-
-      - name: ruff format
-        run: uv run ruff format --check .
-
-      - name: ty check
-        run: uv run ty check
-
-      - name: shellcheck
-        run: shellcheck scripts/*.sh
+      # Single source of truth: every lint rule is defined in
+      # `.pre-commit-config.yaml`, so CI runs exactly what devs run
+      # locally. SKIP covers pre-push-stage hooks (pytest, LOC
+      # badges) which have dedicated CI jobs below, plus the
+      # check-branch hook which is only meaningful in a local
+      # working copy.
+      - name: pre-commit
+        env:
+          SKIP: check-branch,pytest-unit,pytest-integration,update-loc-badges
+        run: uv run pre-commit run --all-files --show-diff-on-failure
 
   test:
     runs-on: ubuntu-latest
