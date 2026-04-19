@@ -1,6 +1,8 @@
 # Terminus-2 Agent: Source Code Reference
 
-This document is the reference analysis of Terminus-2's source code. Termiclaw's implementation spec is in [SPEC.md](SPEC.md). For differences between Terminus and Termiclaw, see SPEC.md section 17.
+> **Reference analysis.** This document snapshots Terminus-2's source code as read during Termiclaw's pre-v1.0 design. Not updated for upstream changes; see the Harbor Framework repo for the live source.
+
+This document is the reference analysis of Terminus-2's source code. For differences between Terminus and Termiclaw, see [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Overview
 
