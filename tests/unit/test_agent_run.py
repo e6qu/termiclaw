@@ -11,7 +11,7 @@ import subprocess as sp
 from termiclaw.agent import run
 from termiclaw.errors import ContainerProvisionError, ImageBuildError
 from termiclaw.events import LoopTick
-from termiclaw.models import Config, ParseResult, PlannerUsage
+from termiclaw.models import Config, ParsedCommand, ParseResult, PlannerUsage
 from termiclaw.result import Err, Ok
 from termiclaw.summarize_worker import SummarizationComplete
 from tests.unit.fakes import (
@@ -50,6 +50,37 @@ def test_run_session_provision_calledprocesserror_marks_failed(tmp_path, tmp_db_
     assert state.status == "failed"
     # destroy_container was called during teardown — the stubbed cid was
     # captured on the fake.
+    assert container.destroyed_containers == ["fake-cid"]
+
+
+def test_run_send_and_wait_idle_error_marks_failed(tmp_path, tmp_db_path):
+    """BUG-45: if `send_and_wait_idle` raises (e.g. container removed mid-run),
+    the exception must be translated to SendKeysFailed → run status "failed",
+    no traceback escape, finally still tears down.
+    """
+    _ = tmp_db_path
+    from termiclaw.errors import SessionDeadError  # noqa: PLC0415
+
+    container = FakeContainerPort(is_alive=True)
+    container.alive_sequence.extend([True, True])
+    container.incremental_outputs.extend([("$ ", "$ ")])
+    container.send_and_wait_raises = SessionDeadError("container vanished")
+    planner = FakePlannerPort()
+    planner.query_responses.append(Ok("{}"))
+    planner.parse_responses.append(
+        Ok(
+            ParseResult(
+                analysis="run ls", commands=(ParsedCommand(keystrokes="ls\n", duration=0.1),)
+            )
+        ),
+    )
+    planner.usage_responses.append(PlannerUsage())
+    ports = build_fake_ports(container=container, planner=planner)
+    state = run(
+        Config(instruction="t", max_turns=4, runs_dir=str(tmp_path / "runs")),
+        ports=ports,
+    )
+    assert state.status == "failed"
     assert container.destroyed_containers == ["fake-cid"]
 
 

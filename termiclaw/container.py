@@ -16,7 +16,7 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from termiclaw.errors import ContainerProvisionError, ImageBuildError
+from termiclaw.errors import ContainerProvisionError, ImageBuildError, SessionDeadError
 from termiclaw.logging import get_logger
 from termiclaw.result import Err, Ok
 
@@ -210,25 +210,33 @@ def send_keys(
       (`"ls -la Enter"` → types `ls -la` then presses Enter).
     """
     stripped = keys.strip()
-    if SPECIAL_KEY_RE.match(stripped):
-        subprocess.run(
-            [*_dx(container_id), "tmux", "send-keys", "-t", session_name, stripped],
-            check=True,
-            capture_output=True,
-        )
-        return
-    chunks = _split_keys(keys, max_command_length)
-    for chunk in chunks:
-        # No `shlex.quote` — subprocess list mode bypasses the shell, so
-        # quoting would put literal single quotes *into* tmux's input
-        # stream, which tmux would then type into the terminal (see
-        # BUG-42; same class as BUG-15, which was never actually removed
-        # from this call site).
-        subprocess.run(
-            [*_dx(container_id), "tmux", "send-keys", "-t", session_name, chunk],
-            check=True,
-            capture_output=True,
-        )
+    try:
+        if SPECIAL_KEY_RE.match(stripped):
+            subprocess.run(
+                [*_dx(container_id), "tmux", "send-keys", "-t", session_name, stripped],
+                check=True,
+                capture_output=True,
+            )
+            return
+        chunks = _split_keys(keys, max_command_length)
+        for chunk in chunks:
+            # No `shlex.quote` — subprocess list mode bypasses the shell, so
+            # quoting would put literal single quotes *into* tmux's input
+            # stream, which tmux would then type into the terminal (see
+            # BUG-42; same class as BUG-15, which was never actually removed
+            # from this call site).
+            subprocess.run(
+                [*_dx(container_id), "tmux", "send-keys", "-t", session_name, chunk],
+                check=True,
+                capture_output=True,
+            )
+    except subprocess.CalledProcessError as e:
+        # docker exec / tmux failed — most commonly because the container
+        # went away (rm'd) or the session died. Translate to the domain
+        # error so `shell._apply_send_keys` catches it and emits
+        # `SendKeysFailed` (→ run marked failed cleanly). See BUG-45.
+        msg = f"send_keys failed: {e.stderr or e}"
+        raise SessionDeadError(msg) from e
 
 
 def _split_keys(keys: str, max_length: int) -> list[str]:
@@ -264,23 +272,31 @@ def _find_max_chunk_size(text: str, max_length: int) -> int:
 
 def capture_visible(container_id: str, session_name: str) -> str:
     """Capture the visible pane content."""
-    result = subprocess.run(
-        [*_dx(container_id), "tmux", "capture-pane", "-p", "-t", session_name],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            [*_dx(container_id), "tmux", "capture-pane", "-p", "-t", session_name],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as e:
+        msg = f"capture_visible failed: {e.stderr or e}"
+        raise SessionDeadError(msg) from e
     return result.stdout
 
 
 def capture_full_history(container_id: str, session_name: str) -> str:
     """Capture the full scrollback history via `-S -`."""
-    result = subprocess.run(
-        [*_dx(container_id), "tmux", "capture-pane", "-p", "-t", session_name, "-S", "-"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            [*_dx(container_id), "tmux", "capture-pane", "-p", "-t", session_name, "-S", "-"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as e:
+        msg = f"capture_full_history failed: {e.stderr or e}"
+        raise SessionDeadError(msg) from e
     return result.stdout
 
 

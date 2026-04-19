@@ -190,6 +190,26 @@ def test_send_keys_text_passed_verbatim():
     assert "'ls -la Enter'" not in args
 
 
+def test_send_keys_translates_calledprocesserror_to_sessiondead():
+    """BUG-45: raw CalledProcessError from docker exec must become a
+    ContainerError subclass (`SessionDeadError`) so shell's existing
+    `except ContainerError:` catches it and the run fails cleanly
+    rather than exploding with a traceback.
+    """
+    import pytest  # noqa: PLC0415 — local import keeps top-level imports tidy
+
+    from termiclaw.errors import SessionDeadError  # noqa: PLC0415
+
+    with patch("termiclaw.container.subprocess.run") as mock_run:
+        mock_run.side_effect = subprocess.CalledProcessError(
+            1,
+            ["docker", "exec"],
+            stderr=b"no such container\n",
+        )
+        with pytest.raises(SessionDeadError):
+            send_keys(_CID, "s1", "ls -la\n")
+
+
 def test_send_keys_single_quotes_not_escaped():
     """A payload containing single quotes must reach tmux literally — no
     `shlex.quote`'s `'\"'\"'` dance, which would type literal quotes into

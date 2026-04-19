@@ -224,11 +224,17 @@ fi
 # ---------------------------------------------------------------
 if [ -n "$latest_run" ]; then
     fork_target="/tmp/termiclaw-fork-$$.txt"
+    # Snapshot run ids BEFORE the fork so the post-fork picker can find
+    # *the fork itself* rather than any unrelated run that happened to
+    # land between launch and assertion (e.g., a parallel manual test).
+    fork_known_before=$(tc list 2>&1 | awk 'NR>2 {print $1}' | sort)
     run_case "fork existing run"  0 tc fork "$latest_run" \
         --task "Create $fork_target with the single word 'forked' inside. Do not set task_complete=true until cat $fork_target prints 'forked'." \
         --max-turns 6
-    # Pick the newest run other than $latest_run to assert on.
-    fork_run=$(tc list 2>&1 | awk -v orig="$latest_run" 'NR>2 && $1!=orig {print $1; exit}')
+    # The fork's run id is whatever appears in the post list that
+    # wasn't there before. That's unambiguous even under contamination.
+    fork_run=$(tc list 2>&1 | awk 'NR>2 {print $1}' | sort \
+        | comm -23 - <(printf "%s\n" "$fork_known_before") | head -1)
     if [ -n "$fork_run" ]; then
         fork_json=$(ls -1 "./termiclaw_runs/${fork_run}"*/run.json 2>/dev/null | head -1)
         if [ -n "$fork_json" ]; then
