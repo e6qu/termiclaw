@@ -35,6 +35,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
+    from termiclaw.errors import PlannerError
     from termiclaw.events import Event
     from termiclaw.models import Config
     from termiclaw.ports import Ports
@@ -100,10 +101,12 @@ def run(
     )
 
     holder = _StateHolder(state)
+    from termiclaw import planner  # noqa: PLC0415 — avoid circular import
+
     ports_resolved = ports or build_default_ports(
         config,
         conn,
-        _build_summarization_query_fn(holder, config),
+        _build_summarization_query_fn(holder, config, planner.query_planner),
     )
 
     image_result = ports_resolved.container.ensure_image()
@@ -339,12 +342,18 @@ def _final_artifact_snapshot(
 def _build_summarization_query_fn(
     holder: _StateHolder,
     config: Config,
+    query_planner: Callable[..., Result[str, PlannerError]],
 ) -> Callable[[str], str]:
-    """Build the `query_fn` the background summarizer uses for its 3 subagents."""
-    from termiclaw import planner  # noqa: PLC0415 — avoid circular import
+    """Build the `query_fn` the background summarizer uses for its 3 subagents.
+
+    `query_planner` is injected (rather than imported inline) so tests can
+    pass a fake without `mock.patch("termiclaw.planner.query_planner", ...)`.
+    Production callers pass `termiclaw.planner.query_planner` via the
+    inline import in `agent.run`.
+    """
 
     def query_fn(prompt: str) -> str:
-        result = planner.query_planner(
+        result = query_planner(
             prompt,
             timeout=config.planner_timeout,
             retries=1,

@@ -8,7 +8,7 @@ wires everything together.
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -18,6 +18,9 @@ from termiclaw.errors import PlannerError
 from termiclaw.models import Config
 from termiclaw.result import Err, Ok
 from termiclaw.state import State
+
+if TYPE_CHECKING:
+    from termiclaw.result import Result
 
 
 def _make_state(
@@ -48,32 +51,42 @@ def test_termination_reason_failed():
     assert termination_reason("failed") == "max_turns_or_failure"
 
 
+def _stub_planner(response: Result[str, PlannerError]):
+    def planner_fn(_prompt: str, **_kwargs: object) -> Result[str, PlannerError]:
+        return response
+
+    return planner_fn
+
+
 def test_build_summarization_query_fn_returns_result_field():
     state = _make_state(claude_session_id="sess")
     cfg = Config(instruction="t")
-    qf = _build_summarization_query_fn(_StateHolder(state), cfg)
-    envelope = '{"result": "summary text"}'
-    with patch("termiclaw.planner.query_planner", return_value=Ok(envelope)):
-        assert qf("any prompt") == "summary text"
+    qf = _build_summarization_query_fn(
+        _StateHolder(state),
+        cfg,
+        _stub_planner(Ok('{"result": "summary text"}')),
+    )
+    assert qf("any prompt") == "summary text"
 
 
 def test_build_summarization_query_fn_returns_raw_on_nonjson():
     state = _make_state(claude_session_id="sess")
     cfg = Config(instruction="t")
-    qf = _build_summarization_query_fn(_StateHolder(state), cfg)
-    with patch("termiclaw.planner.query_planner", return_value=Ok("plain text")):
-        assert qf("any prompt") == "plain text"
+    qf = _build_summarization_query_fn(
+        _StateHolder(state),
+        cfg,
+        _stub_planner(Ok("plain text")),
+    )
+    assert qf("any prompt") == "plain text"
 
 
 def test_build_summarization_query_fn_raises_on_err():
     state = _make_state(claude_session_id="sess")
     cfg = Config(instruction="t")
-    qf = _build_summarization_query_fn(_StateHolder(state), cfg)
-    with (
-        patch(
-            "termiclaw.planner.query_planner",
-            return_value=Err(PlannerError("boom")),
-        ),
-        pytest.raises(PlannerError),
-    ):
+    qf = _build_summarization_query_fn(
+        _StateHolder(state),
+        cfg,
+        _stub_planner(Err(PlannerError("boom"))),
+    )
+    with pytest.raises(PlannerError):
         qf("any prompt")
