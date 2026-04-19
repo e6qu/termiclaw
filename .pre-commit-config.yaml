@@ -20,7 +20,6 @@ repos:
     rev: v0.11.0
     hooks:
       - id: shellcheck
-        args: [--severity=warning]
 
   - repo: https://github.com/compilerla/conventional-pre-commit
     rev: v4.4.0

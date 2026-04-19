@@ -110,8 +110,8 @@ latest_run=$(tc list 2>&1 | awk 'NR>2 {print $1; exit}')
 # 3. Run metadata + trajectory sanity (regression for BUG-41 / BUG-42)
 # ---------------------------------------------------------------
 if [ -n "$latest_run" ]; then
-    run_json=$(ls -1 "./termiclaw_runs/${latest_run}"*/run.json 2>/dev/null | head -1)
-    traj=$(ls -1 "./termiclaw_runs/${latest_run}"*/trajectory.jsonl 2>/dev/null | head -1)
+    run_json=$(find ./termiclaw_runs -maxdepth 2 -name run.json -path "*${latest_run}*" 2>/dev/null | head -1)
+    traj=$(find ./termiclaw_runs -maxdepth 2 -name trajectory.jsonl -path "*${latest_run}*" 2>/dev/null | head -1)
     if [ -n "$run_json" ] && [ -f "$run_json" ]; then
         meta=$(python3 <<PY
 import json
@@ -130,10 +130,16 @@ PY
         else
             fail "step counter (BUG-41 regression)" "meta=$steps_meta traj=$steps_traj"
         fi
-        [ "$status_meta" = "succeeded" ] && pass "run status=succeeded" \
-            || fail "run status" "expected succeeded, got $status_meta"
-        [ "$term_meta" = "task_complete_confirmed" ] && pass "termination_reason=$term_meta" \
-            || fail "termination_reason" "expected task_complete_confirmed, got $term_meta"
+        if [ "$status_meta" = "succeeded" ]; then
+            pass "run status=succeeded"
+        else
+            fail "run status" "expected succeeded, got $status_meta"
+        fi
+        if [ "$term_meta" = "task_complete_confirmed" ]; then
+            pass "termination_reason=$term_meta"
+        else
+            fail "termination_reason" "expected task_complete_confirmed, got $term_meta"
+        fi
 
         # BUG-42 regression: trajectory keystrokes must contain the
         # literal single-quoted payload *without* shlex escape sequences
@@ -188,7 +194,7 @@ fi
 if [ -n "$latest_run" ]; then
     run_case "show <run-id>"      0 tc show "$latest_run"
     run_case "export atif"        0 tc export "$latest_run" --format atif
-    atif_file=$(ls -1 "./termiclaw_runs/${latest_run}"*"/${latest_run}"*.atif.json 2>/dev/null | head -1)
+    atif_file=$(find ./termiclaw_runs -maxdepth 2 -name "*.atif.json" -path "*${latest_run}*" 2>/dev/null | head -1)
     if [ -n "$atif_file" ] && python3 -c "import json; json.load(open('$atif_file'))" 2>/dev/null; then
         pass "atif JSON parses"
         # Verify the ATIF top-level keys this codebase actually emits
@@ -236,11 +242,14 @@ if [ -n "$latest_run" ]; then
     fork_run=$(tc list 2>&1 | awk 'NR>2 {print $1}' | sort \
         | comm -23 - <(printf "%s\n" "$fork_known_before") | head -1)
     if [ -n "$fork_run" ]; then
-        fork_json=$(ls -1 "./termiclaw_runs/${fork_run}"*/run.json 2>/dev/null | head -1)
+        fork_json=$(find ./termiclaw_runs -maxdepth 2 -name run.json -path "*${fork_run}*" 2>/dev/null | head -1)
         if [ -n "$fork_json" ]; then
             fs=$(python3 -c "import json; d=json.load(open('$fork_json')); print(d.get('status',''))")
-            [ "$fs" = "succeeded" ] && pass "fork run succeeded" \
-                || fail "fork status" "expected succeeded, got $fs"
+            if [ "$fs" = "succeeded" ]; then
+                pass "fork run succeeded"
+            else
+                fail "fork status" "expected succeeded, got $fs"
+            fi
         else
             fail "fork metadata" "run.json not found for $fork_run"
         fi
