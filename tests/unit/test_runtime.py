@@ -37,6 +37,29 @@ def test_default_container_port_delegates_tail_and_truncate():
     assert len(out) <= 10 or "truncated" in out
 
 
+def test_default_container_port_provision_session_sleeps_after_provisioning():
+    """W7 moved the 0.5s post-attach wait from agent.run into the port
+    facade so tests using FakeContainerPort don't need to patch
+    time.sleep. Lock that contract in.
+    """
+    from unittest.mock import patch  # noqa: PLC0415 — only needed in this test
+
+    port = DefaultContainerPort()
+    call_order: list[str] = []
+    with (
+        patch(
+            "termiclaw.runtime._container_mod.provision_session",
+            side_effect=lambda *a, **kw: call_order.append("provision"),
+        ),
+        patch(
+            "termiclaw.runtime.time.sleep",
+            side_effect=lambda _s: call_order.append("sleep"),
+        ),
+    ):
+        port.provision_session("cid", "s1", width=80, height=24, history_limit=1000)
+    assert call_order == ["provision", "sleep"], "sleep must run AFTER provisioning"
+
+
 def test_default_planner_port_build_prompt():
     port = DefaultPlannerPort()
     prompt = port.build_prompt("do X", "$ ", None, None)
