@@ -190,6 +190,38 @@ def test_send_keys_text_passed_verbatim():
     assert "'ls -la Enter'" not in args
 
 
+def test_capture_visible_translates_calledprocesserror_to_sessiondead():
+    """BUG-45 (extension): capture_visible also must translate."""
+    import pytest  # noqa: PLC0415
+
+    from termiclaw.errors import SessionDeadError  # noqa: PLC0415
+
+    with patch("termiclaw.container.subprocess.run") as mock_run:
+        mock_run.side_effect = subprocess.CalledProcessError(
+            1,
+            ["docker", "exec"],
+            stderr=b"container gone\n",
+        )
+        with pytest.raises(SessionDeadError):
+            capture_visible(_CID, "s1")
+
+
+def test_capture_full_history_translates_calledprocesserror_to_sessiondead():
+    """BUG-45 (extension): capture_full_history also must translate."""
+    import pytest  # noqa: PLC0415
+
+    from termiclaw.errors import SessionDeadError  # noqa: PLC0415
+
+    with patch("termiclaw.container.subprocess.run") as mock_run:
+        mock_run.side_effect = subprocess.CalledProcessError(
+            1,
+            ["docker", "exec"],
+            stderr=b"container gone\n",
+        )
+        with pytest.raises(SessionDeadError):
+            capture_full_history(_CID, "s1")
+
+
 def test_send_keys_translates_calledprocesserror_to_sessiondead():
     """BUG-45: raw CalledProcessError from docker exec must become a
     ContainerError subclass (`SessionDeadError`) so shell's existing
