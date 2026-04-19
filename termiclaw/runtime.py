@@ -8,6 +8,7 @@ that `agent.run()` injects into `shell.apply`.
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING
 
 from termiclaw import artifacts as _artifacts_mod
@@ -33,7 +34,11 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
-    from termiclaw.errors import SummarizationError
+    from termiclaw.errors import (
+        ContainerProvisionError,
+        ImageBuildError,
+        SummarizationError,
+    )
     from termiclaw.models import Config, ParseResult, StepRecord
     from termiclaw.result import Result
     from termiclaw.state import State
@@ -42,9 +47,45 @@ if TYPE_CHECKING:
         SummarizationJob,
     )
 
+_POST_PROVISION_SESSION_WAIT_S = 0.5
+
 
 class DefaultContainerPort(ContainerPort):
     """Facade over `termiclaw.container`."""
+
+    def ensure_image(self) -> Result[str, ImageBuildError]:
+        return _container_mod.ensure_image()
+
+    def provision_container(
+        self,
+        image: str,
+        network: str,
+    ) -> Result[str, ContainerProvisionError]:
+        return _container_mod.provision_container(image, network)
+
+    def provision_session(
+        self,
+        container_id: str,
+        session_name: str,
+        *,
+        width: int,
+        height: int,
+        history_limit: int,
+    ) -> None:
+        _container_mod.provision_session(
+            container_id,
+            session_name,
+            width=width,
+            height=height,
+            history_limit=history_limit,
+        )
+        # Give tmux a moment to finish attaching the session before the
+        # first send-keys / capture. Moved from agent.run() so tests
+        # using FakeContainerPort don't need to patch time.sleep.
+        time.sleep(_POST_PROVISION_SESSION_WAIT_S)
+
+    def destroy_container(self, container_id: str) -> None:
+        _container_mod.destroy_container(container_id)
 
     def is_session_alive(self, container_id: str, session: str) -> bool:
         return _container_mod.is_session_alive(container_id, session)

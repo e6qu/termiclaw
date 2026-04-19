@@ -105,7 +105,8 @@ Guards run in `.pre-commit-config.yaml` and fail the pre-commit stage:
 | v1.4    | Pure `decide` + `apply` shell                      | `termiclaw/decide.py`, `termiclaw/shell.py`; `Transition` product; exhaustive match on `Event`/`Command`. |
 | v1.4    | `Ports` Protocol bundle                            | `termiclaw/ports.py`, `termiclaw/runtime.py`; tests use `tests/unit/fakes/` (no `mock.patch` of internals). |
 | v1.4    | Lint: no-monkeypatch + exhaustive-match guards     | Added to pre-commit alongside object/Any ban. |
-| v1.4    | Live e2e shakeout bugfixes                         | BUG-33..43 — see `BUGS.md`. Added reserved-logrecord + shlex-quote pre-commit guards. |
+| v1.4    | Live e2e shakeout bugfixes                         | BUG-33..44 — see `BUGS.md`. Added reserved-logrecord + shlex-quote pre-commit guards. |
+| v1.4    | Ports for provisioning (W7 follow-up)              | `container.ensure_image` / `provision_container` / `provision_session` / `destroy_container` behind `ContainerPort`; `mock.patch` of provisioning internals gone from the unit suite. |
 
 ## After v1.4
 
@@ -121,10 +122,6 @@ Candidates, roughly ordered; user reprioritizes as needed:
    MCTS / eval / replay can be seeded from external runs.
 4. **Docker image publish to ghcr** — turnkey install; drop the
    local-build-on-first-run step for most users.
-5. **Ports for provisioning** — move `container.ensure_image` /
-   `provision_container` / `provision_session` behind a Ports seam
-   so `agent.run()` can be tested without `mock.patch` on the pre-
-   Ports path (follow-up to v1.4's `Ports` refactor).
 
 ## Dropped
 

@@ -6,10 +6,17 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from termiclaw.result import Ok
+
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-    from termiclaw.errors import ContainerError
+    from termiclaw.errors import (
+        ContainerError,
+        ContainerProvisionError,
+        ImageBuildError,
+    )
+    from termiclaw.result import Result
 
 
 @dataclass
@@ -33,9 +40,46 @@ class FakeContainerPort:
     send_and_wait_result: bool = True
     send_and_wait_raises: Exception | None = None
     send_keys_raises: Exception | None = None
+    ensure_image_result: Result[str, ImageBuildError] | None = None
+    provision_container_result: Result[str, ContainerProvisionError] | None = None
+    provision_session_raises: Exception | None = None
     # observation logs for assertions
     sent_keys: list[tuple[str, int]] = field(default_factory=list)
     interrupts: list[str] = field(default_factory=list)
+    destroyed_containers: list[str] = field(default_factory=list)
+
+    def ensure_image(self) -> Result[str, ImageBuildError]:
+        return (
+            self.ensure_image_result if self.ensure_image_result is not None else Ok("fake-image")
+        )
+
+    def provision_container(
+        self,
+        image: str,
+        network: str,
+    ) -> Result[str, ContainerProvisionError]:
+        _ = (image, network)
+        return (
+            self.provision_container_result
+            if self.provision_container_result is not None
+            else Ok("fake-cid")
+        )
+
+    def provision_session(
+        self,
+        container_id: str,
+        session_name: str,
+        *,
+        width: int,
+        height: int,
+        history_limit: int,
+    ) -> None:
+        _ = (container_id, session_name, width, height, history_limit)
+        if self.provision_session_raises is not None:
+            raise self.provision_session_raises
+
+    def destroy_container(self, container_id: str) -> None:
+        self.destroyed_containers.append(container_id)
 
     def is_session_alive(self, container_id: str, session: str) -> bool:
         _ = (container_id, session)

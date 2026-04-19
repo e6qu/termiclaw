@@ -11,14 +11,13 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
-import time
 import uuid
 from collections import deque
 from dataclasses import replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from termiclaw import agent_core, container, db, trajectory
+from termiclaw import agent_core, db, trajectory
 from termiclaw.decide import DecideEffects, decide
 from termiclaw.errors import TermiclawError
 from termiclaw.events import (
@@ -33,7 +32,6 @@ from termiclaw.shell import apply
 from termiclaw.state import ForkContext, State, with_status
 
 if TYPE_CHECKING:
-    import sqlite3
     from collections.abc import Callable
     from pathlib import Path
 
@@ -101,42 +99,46 @@ def run(
         fork=fork,
     )
 
-    image_result = container.ensure_image()
-    if isinstance(image_result, Err):
-        return _provision_failure(
-            state,
-            conn,
-            run_dir,
-            f"image build failed: {image_result.error}",
-        )
-    provision_result = container.provision_container(image_result.value, config.docker_network)
-    if isinstance(provision_result, Err):
-        return _provision_failure(
-            state,
-            conn,
-            run_dir,
-            f"container provision failed: {provision_result.error}",
-        )
-    state = replace(state, container_id=provision_result.value)
-    try:
-        container.provision_session(
-            state.container_id,
-            session_name,
-            width=config.pane_width,
-            height=config.pane_height,
-            history_limit=config.history_limit,
-        )
-        time.sleep(0.5)
-    except subprocess.CalledProcessError:
-        _log.exception("Failed to provision tmux session inside container")
-        return _provision_failure(state, conn, run_dir, "tmux session provision failed")
-
     holder = _StateHolder(state)
     ports_resolved = ports or build_default_ports(
         config,
         conn,
         _build_summarization_query_fn(holder, config),
     )
+
+    image_result = ports_resolved.container.ensure_image()
+    if isinstance(image_result, Err):
+        return _provision_failure(
+            state,
+            run_dir,
+            ports_resolved,
+            f"image build failed: {image_result.error}",
+        )
+    provision_result = ports_resolved.container.provision_container(
+        image_result.value,
+        config.docker_network,
+    )
+    if isinstance(provision_result, Err):
+        return _provision_failure(
+            state,
+            run_dir,
+            ports_resolved,
+            f"container provision failed: {provision_result.error}",
+        )
+    state = replace(state, container_id=provision_result.value)
+    holder.state = state
+    try:
+        ports_resolved.container.provision_session(
+            state.container_id,
+            session_name,
+            width=config.pane_width,
+            height=config.pane_height,
+            history_limit=config.history_limit,
+        )
+    except subprocess.CalledProcessError:
+        _log.exception("Failed to provision tmux session inside container")
+        return _provision_failure(state, run_dir, ports_resolved, "tmux session provision failed")
+
     ports_resolved.persistence.insert_run(state)
     effects = DecideEffects(
         new_id=lambda: uuid.uuid4().hex,
@@ -171,7 +173,7 @@ def run(
         )
         conn.close()
         if not config.keep_session:
-            container.destroy_container(state.container_id)
+            ports_resolved.container.destroy_container(state.container_id)
         _log.info("Run finished", extra={"status": state.status, "steps": state.current_step})
 
     return state
@@ -265,29 +267,32 @@ def _event_from_poll(
 
 def _provision_failure(
     state: State,
-    conn: sqlite3.Connection,
     run_dir: Path,
+    ports: Ports,
     reason: str,
 ) -> State:
     """Short-circuit tear-down when container/session provisioning fails."""
     _log.error("Provisioning failed", extra={"reason": reason})
     state = with_status(state, "failed")
     finished = datetime.now(tz=UTC).isoformat()
-    trajectory.write_run_metadata(
+    ports.persistence.write_run_metadata(
         run_dir,
         state,
         finished_at=finished,
         termination_reason="container_provision_failed",
     )
-    db.update_run(
-        conn,
+    ports.persistence.update_run(
         state,
         finished_at=finished,
         termination_reason="container_provision_failed",
+        total_prompt_tokens=state.total_prompt_tokens,
+        total_input_tokens=0,
+        total_output_tokens=0,
+        total_cost_usd=0.0,
     )
-    conn.close()
+    ports.summarize.shutdown()
     if state.container_id:
-        container.destroy_container(state.container_id)
+        ports.container.destroy_container(state.container_id)
     _log.info("Run finished", extra={"status": state.status, "steps": state.current_step})
     return state
 

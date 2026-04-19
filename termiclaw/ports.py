@@ -16,6 +16,8 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from termiclaw.errors import (
+        ContainerProvisionError,
+        ImageBuildError,
         PlannerError,
         SummarizationError,
     )
@@ -30,6 +32,26 @@ if TYPE_CHECKING:
 
 class ContainerPort(Protocol):
     """Docker + tmux surface used by the agent loop."""
+
+    def ensure_image(self) -> Result[str, ImageBuildError]: ...
+
+    def provision_container(
+        self,
+        image: str,
+        network: str,
+    ) -> Result[str, ContainerProvisionError]: ...
+
+    def provision_session(
+        self,
+        container_id: str,
+        session_name: str,
+        *,
+        width: int,
+        height: int,
+        history_limit: int,
+    ) -> None: ...
+
+    def destroy_container(self, container_id: str) -> None: ...
 
     def is_session_alive(self, container_id: str, session: str) -> bool: ...
 
