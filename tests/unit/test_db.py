@@ -1,5 +1,7 @@
 """Tests for termiclaw.db."""
 
+from dataclasses import replace
+
 from termiclaw.db import (
     get_run,
     get_steps,
@@ -10,11 +12,12 @@ from termiclaw.db import (
     list_runs_from_db,
     update_run,
 )
-from termiclaw.models import ParsedCommand, RunState, StepRecord
+from termiclaw.models import ParsedCommand, StepRecord
+from termiclaw.state import RunStatus, State
 
 
-def _make_state(run_id: str = "abc123", status: str = "active") -> RunState:
-    return RunState(
+def _make_state(run_id: str = "abc123", status: RunStatus = "active") -> State:
+    return State(
         run_id=run_id,
         instruction="test task",
         tmux_session=f"t-{run_id}",
@@ -32,8 +35,7 @@ def test_init_db(tmp_path):
 def test_insert_and_list_runs(tmp_path):
     conn = init_db(tmp_path / "test.db")
     s1 = _make_state("run1")
-    s2 = _make_state("run2")
-    s2.started_at = "2026-04-06T01:00:00+00:00"
+    s2 = replace(_make_state("run2"), started_at="2026-04-06T01:00:00+00:00")
     insert_run(conn, s1)
     insert_run(conn, s2)
     runs = list_runs_from_db(conn)
@@ -46,14 +48,13 @@ def test_update_run(tmp_path):
     conn = init_db(tmp_path / "test.db")
     state = _make_state()
     insert_run(conn, state)
-    state.status = "succeeded"
-    state.current_step = 5
+    state = replace(state, status="succeeded", current_step=5)
     update_run(
         conn,
         state,
         finished_at="2026-04-06T00:05:00+00:00",
         termination_reason="done",
-        total_prompt_chars=10000,
+        total_prompt_tokens=10000,
         total_input_tokens=500,
         total_output_tokens=200,
         total_cost_usd=0.05,
@@ -79,7 +80,7 @@ def test_insert_step(tmp_path):
         observation="output",
         analysis="checking",
         commands=(cmd,),
-        metrics=(("prompt_chars", 1500),),
+        metrics=(("prompt_tokens", 1500),),
     )
     insert_step(
         conn,
@@ -122,14 +123,14 @@ def test_get_usage_summary(tmp_path):
     s2 = _make_state("r2", status="failed")
     insert_run(conn, s1)
     insert_run(conn, s2)
-    s1.current_step = 3
-    s2.current_step = 1
+    s1 = replace(s1, current_step=3)
+    s2 = replace(s2, current_step=1)
     update_run(
         conn,
         s1,
         finished_at="t",
         termination_reason="done",
-        total_prompt_chars=5000,
+        total_prompt_tokens=5000,
         total_input_tokens=200,
         total_output_tokens=100,
         total_cost_usd=0.03,
@@ -139,7 +140,7 @@ def test_get_usage_summary(tmp_path):
         s2,
         finished_at="t",
         termination_reason="err",
-        total_prompt_chars=1000,
+        total_prompt_tokens=1000,
         total_input_tokens=50,
         total_output_tokens=20,
         total_cost_usd=0.01,

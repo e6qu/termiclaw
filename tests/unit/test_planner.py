@@ -4,11 +4,14 @@ import json
 import subprocess
 from unittest.mock import patch
 
-import pytest
-
-from termiclaw.planner import build_prompt, extract_usage, parse_response, query_planner
-
-# --- Prompt building ---
+from termiclaw.planner import (
+    _build_session_args,
+    build_prompt,
+    extract_usage,
+    parse_response,
+    query_planner,
+)
+from termiclaw.result import Err, Ok
 
 
 def test_build_prompt_basic():
@@ -42,9 +45,6 @@ def test_build_prompt_summary_without_qa():
     assert "Additional context" not in prompt
 
 
-# --- JSON auto-fix pipeline ---
-
-
 def _wrap_envelope(text):
     """Wrap text in a claude -p JSON envelope."""
     return json.dumps({"type": "result", "result": text, "session_id": "test"})
@@ -62,64 +62,91 @@ def test_parse_valid_json():
         )
     )
     result = parse_response(response)
-    assert result.error is None
-    assert result.analysis == "shell idle"
-    assert result.plan == "run ls"
-    assert len(result.commands) == 1
-    assert result.commands[0].keystrokes == "ls\n"
-    assert result.commands[0].duration == 0.5
-    assert result.task_complete is False
+    assert isinstance(result, Ok)
+    parsed = result.value
+    assert parsed.analysis == "shell idle"
+    assert parsed.plan == "run ls"
+    assert len(parsed.commands) == 1
+    assert parsed.commands[0].keystrokes == "ls\n"
+    assert parsed.commands[0].duration == 0.5
+    assert parsed.task_complete is False
 
 
-def test_parse_markdown_fenced():
+def test_parse_markdown_fenced_rejected():
+    """Post-#11: no auto-fix. Schema validation on server side produces
+    raw JSON; any wrapping (code fences, prose) is a parser error."""
     inner = '```json\n{"analysis":"x","plan":"y","commands":[],"task_complete":false}\n```'
     response = _wrap_envelope(inner)
-    result = parse_response(response)
-    assert result.error is None
-    assert result.analysis == "x"
+    assert isinstance(parse_response(response), Err)
 
 
-def test_parse_missing_closing_brace():
+def test_parse_missing_closing_brace_rejected():
     inner = '{"analysis":"x","plan":"y","commands":[],"task_complete":false'
     response = _wrap_envelope(inner)
-    result = parse_response(response)
-    assert result.error is None
-    assert result.analysis == "x"
+    assert isinstance(parse_response(response), Err)
 
 
-def test_parse_mixed_text():
+def test_parse_mixed_text_rejected():
     inner = (
         "Sure! Here is my response:\n"
         '{"analysis":"x","plan":"y","commands":[],"task_complete":false}\n'
         "Hope that helps!"
     )
     response = _wrap_envelope(inner)
-    result = parse_response(response)
-    assert result.error is None
-    assert result.analysis == "x"
+    assert isinstance(parse_response(response), Err)
 
 
-def test_parse_missing_closing_bracket():
-    inner = '{"analysis":"x","plan":"y","commands":[{"keystrokes":"ls"'
-    response = _wrap_envelope(inner)
-    result = parse_response(response)
-    assert result.error is None
-    assert result.analysis == "x"
-    assert len(result.commands) == 1
+def test_build_session_args_first_call_sets_id():
+    args = _build_session_args(
+        claude_session_id="abc-123",
+        first_call=True,
+        resume_parent=None,
+        fork_session=False,
+    )
+    assert args == ["--session-id", "abc-123"]
+
+
+def test_build_session_args_resume():
+    args = _build_session_args(
+        claude_session_id="abc-123",
+        first_call=False,
+        resume_parent=None,
+        fork_session=False,
+    )
+    assert args == ["--resume", "abc-123"]
+
+
+def test_build_session_args_fork():
+    args = _build_session_args(
+        claude_session_id="new-456",
+        first_call=True,
+        resume_parent="parent-789",
+        fork_session=True,
+    )
+    assert args == ["--resume", "parent-789", "--fork-session"]
+
+
+def test_build_session_args_empty():
+    args = _build_session_args(
+        claude_session_id="",
+        first_call=True,
+        resume_parent=None,
+        fork_session=False,
+    )
+    assert args == []
 
 
 def test_parse_garbage():
     response = _wrap_envelope("this is not json at all")
-    result = parse_response(response)
-    assert result.error is not None
-    assert "Failed to parse" in result.error
+    assert isinstance(parse_response(response), Err)
 
 
 def test_parse_empty_commands():
     inner = json.dumps({"analysis": "x", "plan": "y", "commands": [], "task_complete": False})
     response = _wrap_envelope(inner)
     result = parse_response(response)
-    assert result.commands == ()
+    assert isinstance(result, Ok)
+    assert result.value.commands == ()
 
 
 def test_parse_duration_capped():
@@ -133,7 +160,8 @@ def test_parse_duration_capped():
     )
     response = _wrap_envelope(inner)
     result = parse_response(response)
-    assert result.commands[0].duration == 60.0
+    assert isinstance(result, Ok)
+    assert result.value.commands[0].duration == 60.0
 
 
 def test_parse_missing_duration():
@@ -147,45 +175,43 @@ def test_parse_missing_duration():
     )
     response = _wrap_envelope(inner)
     result = parse_response(response)
-    assert result.commands[0].duration == 0.5
+    assert isinstance(result, Ok)
+    assert result.value.commands[0].duration == 0.5
 
 
 def test_parse_task_complete_true():
     inner = json.dumps({"analysis": "done", "plan": "none", "commands": [], "task_complete": True})
     response = _wrap_envelope(inner)
     result = parse_response(response)
-    assert result.task_complete is True
+    assert isinstance(result, Ok)
+    assert result.value.task_complete is True
 
 
 def test_parse_envelope_unwrap():
     inner_json = '{"analysis":"a","plan":"p","commands":[],"task_complete":false}'
     envelope = json.dumps({"type": "result", "result": inner_json, "session_id": "s123"})
     result = parse_response(envelope)
-    assert result.error is None
-    assert result.analysis == "a"
+    assert isinstance(result, Ok)
+    assert result.value.analysis == "a"
 
 
 def test_parse_bad_envelope():
-    result = parse_response("not json")
-    assert result.error is not None
+    assert isinstance(parse_response("not json"), Err)
 
 
 def test_parse_empty_result():
     envelope = json.dumps({"type": "result", "result": "", "session_id": "s"})
-    result = parse_response(envelope)
-    assert result.error is not None
+    assert isinstance(parse_response(envelope), Err)
 
 
 def test_parse_field_order_warning():
     inner = json.dumps({"commands": [], "analysis": "x", "plan": "y", "task_complete": False})
     response = _wrap_envelope(inner)
     result = parse_response(response)
-    assert result.error is None
-    assert result.warning is not None
-    assert "order" in result.warning
-
-
-# --- Subprocess invocation (mocked) ---
+    assert isinstance(result, Ok)
+    parsed = result.value
+    assert parsed.warning is not None
+    assert "order" in parsed.warning
 
 
 def test_query_planner_success():
@@ -193,8 +219,9 @@ def test_query_planner_success():
         args=["claude"], returncode=0, stdout='{"result":"ok"}', stderr=""
     )
     with patch("termiclaw.planner.subprocess.run", return_value=mock_result):
-        output = query_planner("test prompt")
-    assert output == '{"result":"ok"}'
+        result = query_planner("test prompt")
+    assert isinstance(result, Ok)
+    assert result.value == '{"result":"ok"}'
 
 
 def test_query_planner_retry_on_error():
@@ -203,8 +230,9 @@ def test_query_planner_retry_on_error():
         args=["claude"], returncode=0, stdout='{"result":"ok"}', stderr=""
     )
     with patch("termiclaw.planner.subprocess.run", side_effect=[fail, success]):
-        output = query_planner("test", retries=3)
-    assert output == '{"result":"ok"}'
+        result = query_planner("test", retries=3)
+    assert isinstance(result, Ok)
+    assert result.value == '{"result":"ok"}'
 
 
 def test_query_planner_timeout():
@@ -213,17 +241,16 @@ def test_query_planner_timeout():
         args=["claude"], returncode=0, stdout='{"result":"ok"}', stderr=""
     )
     with patch("termiclaw.planner.subprocess.run", side_effect=[timeout_exc, success]):
-        output = query_planner("test", retries=3)
-    assert output == '{"result":"ok"}'
+        result = query_planner("test", retries=3)
+    assert isinstance(result, Ok)
+    assert result.value == '{"result":"ok"}'
 
 
 def test_query_planner_exhausted_retries():
     fail = subprocess.CompletedProcess(args=["claude"], returncode=1, stdout="", stderr="error")
-    with (
-        patch("termiclaw.planner.subprocess.run", return_value=fail),
-        pytest.raises(RuntimeError, match="failed after 2 attempts"),
-    ):
-        query_planner("test", retries=2)
+    with patch("termiclaw.planner.subprocess.run", return_value=fail):
+        result = query_planner("test", retries=2)
+    assert isinstance(result, Err)
 
 
 def test_query_planner_includes_allowed_tools():
@@ -249,7 +276,8 @@ def test_extract_usage_valid():
         }
     )
     u = extract_usage(raw)
-    assert u.input_tokens == 150
+    assert u.input_tokens == 100
+    assert u.cache_read_input_tokens == 50
     assert u.output_tokens == 200
     assert u.cost_usd == 0.05
     assert u.duration_ms == 3000

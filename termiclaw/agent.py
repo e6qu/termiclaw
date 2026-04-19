@@ -1,4 +1,10 @@
-"""Main observe-decide-act loop."""
+"""Top-level agent run: thin imperative shell over `decide` + `apply`.
+
+Responsible for provisioning the container, building the Ports bundle,
+driving the decide/apply loop, and tearing down. No decision logic,
+no step-building, no stall handling — all of that lives in
+`termiclaw.decide` (pure) and `termiclaw.shell` (per-command effect).
+"""
 
 from __future__ import annotations
 
@@ -7,27 +13,66 @@ import logging
 import subprocess
 import time
 import uuid
+from collections import deque
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from termiclaw import db, planner, summarizer, tmux, trajectory
+from termiclaw import agent_core, container, db, trajectory
+from termiclaw.decide import DecideEffects, decide
+from termiclaw.errors import TermiclawError
+from termiclaw.events import (
+    LoopTick,
+    SummarizationDone,
+    SummarizationFailedEvent,
+)
 from termiclaw.logging import get_logger, setup_logging
-from termiclaw.models import Config, ParseResult, PlannerUsage, RunState, StepRecord
+from termiclaw.result import Err, Ok
+from termiclaw.runtime import build_default_ports
+from termiclaw.shell import apply
+from termiclaw.state import ForkContext, State, with_status
 
 if TYPE_CHECKING:
     import sqlite3
+    from collections.abc import Callable
     from pathlib import Path
+
+    from termiclaw.events import Event
+    from termiclaw.models import Config
+    from termiclaw.ports import Ports
+    from termiclaw.result import Result
+    from termiclaw.summarize_worker import (
+        SummarizationComplete,
+        SummarizationError,
+    )
 
 _log = get_logger("agent")
 
-_MAX_RECENT_STEPS = 20
+
+class _StateHolder:
+    """Mutable one-cell handle shared with long-lived worker closures.
+
+    The summarization query_fn captures this holder and reads
+    `holder.state.claude_session_id` each invocation so post-fork
+    session-id adoption is picked up.
+    """
+
+    __slots__ = ("state",)
+
+    def __init__(self, state: State) -> None:
+        self.state = state
 
 
-def run(config: Config) -> RunState:
+def run(
+    config: Config,
+    *,
+    parent: State | None = None,
+    ports: Ports | None = None,
+) -> State:
     """Run the full agent loop. Top-level entry point."""
     run_id = uuid.uuid4().hex
     session_name = f"termiclaw-{run_id[:8]}"
-    now = datetime.now(tz=UTC).isoformat()
+    now_iso = datetime.now(tz=UTC).isoformat()
 
     level = logging.DEBUG if config.verbose else logging.INFO
     setup_logging(run_id, level=level)
@@ -35,18 +80,47 @@ def run(config: Config) -> RunState:
 
     run_dir = trajectory.ensure_run_dir(config.runs_dir, run_id)
     conn = db.init_db()
-    state = RunState(
+
+    fork = (
+        ForkContext(
+            parent_run_id=parent.run_id,
+            forked_at_step=parent.current_step,
+            resume_parent_session=parent.claude_session_id,
+        )
+        if parent is not None
+        else None
+    )
+    state = State(
         run_id=run_id,
         instruction=config.instruction,
         tmux_session=session_name,
-        started_at=now,
+        started_at=now_iso,
         status="active",
         max_turns=config.max_turns,
+        claude_session_id=str(uuid.uuid4()),
+        fork=fork,
     )
-    db.insert_run(conn, state)
 
+    image_result = container.ensure_image()
+    if isinstance(image_result, Err):
+        return _provision_failure(
+            state,
+            conn,
+            run_dir,
+            f"image build failed: {image_result.error}",
+        )
+    provision_result = container.provision_container(image_result.value, config.docker_network)
+    if isinstance(provision_result, Err):
+        return _provision_failure(
+            state,
+            conn,
+            run_dir,
+            f"container provision failed: {provision_result.error}",
+        )
+    state = replace(state, container_id=provision_result.value)
     try:
-        tmux.provision_session(
+        container.provision_session(
+            state.container_id,
             session_name,
             width=config.pane_width,
             height=config.pane_height,
@@ -54,329 +128,234 @@ def run(config: Config) -> RunState:
         )
         time.sleep(0.5)
     except subprocess.CalledProcessError:
-        _log.error("Failed to provision tmux session")
-        state.status = "failed"
-        finished = datetime.now(tz=UTC).isoformat()
-        trajectory.write_run_metadata(
-            run_dir,
-            state,
-            finished_at=finished,
-            termination_reason="tmux_provision_failed",
-        )
-        db.update_run(conn, state, finished_at=finished, termination_reason="tmux_provision_failed")
-        conn.close()
-        _log.info("Run finished", extra={"status": state.status, "steps": state.current_step})
-        return state
+        _log.exception("Failed to provision tmux session inside container")
+        return _provision_failure(state, conn, run_dir, "tmux session provision failed")
+
+    holder = _StateHolder(state)
+    ports_resolved = ports or build_default_ports(
+        config,
+        conn,
+        _build_summarization_query_fn(holder, config),
+    )
+    ports_resolved.persistence.insert_run(state)
+    effects = DecideEffects(
+        new_id=lambda: uuid.uuid4().hex,
+        now=lambda: datetime.now(tz=UTC).isoformat(),
+    )
 
     try:
-        _run_loop(state, config, run_dir, conn)
+        state = _run_turns(state, config, run_dir, ports_resolved, effects, holder)
     except KeyboardInterrupt:
         _log.info("Interrupted by user")
-        state.status = "cancelled"
+        state = with_status(state, "cancelled")
     finally:
+        ports_resolved.summarize.shutdown()
         finished = datetime.now(tz=UTC).isoformat()
-        reason = _termination_reason(state)
-        trajectory.write_run_metadata(
+        reason = agent_core.termination_reason(state.status)
+        state = _final_artifact_snapshot(state, config, run_dir, ports_resolved)
+        ports_resolved.persistence.write_run_metadata(
             run_dir,
             state,
             finished_at=finished,
             termination_reason=reason,
         )
-        usage = _get_run_usage(conn, state.run_id)
-        db.update_run(
-            conn,
+        usage = ports_resolved.persistence.aggregate_usage(state.run_id)
+        ports_resolved.persistence.update_run(
             state,
             finished_at=finished,
             termination_reason=reason,
-            total_prompt_chars=state.total_prompt_chars,
+            total_prompt_tokens=state.total_prompt_tokens,
             total_input_tokens=usage.input_tokens,
             total_output_tokens=usage.output_tokens,
             total_cost_usd=usage.cost_usd,
         )
         conn.close()
         if not config.keep_session:
-            tmux.destroy_session(session_name)
+            container.destroy_container(state.container_id)
         _log.info("Run finished", extra={"status": state.status, "steps": state.current_step})
 
     return state
 
 
-def _get_run_usage(conn: sqlite3.Connection, run_id: str) -> PlannerUsage:
-    """Aggregate usage from steps table for a run."""
-    cursor = conn.execute(
-        "SELECT COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), "
-        "COALESCE(SUM(cost_usd),0.0) FROM steps WHERE run_id=?",
-        (run_id,),
-    )
-    row = cursor.fetchone()
-    if not row:
-        return PlannerUsage()
-    return PlannerUsage(input_tokens=row[0], output_tokens=row[1], cost_usd=row[2])
-
-
-def _run_loop(state: RunState, config: Config, run_dir: Path, conn: sqlite3.Connection) -> None:
-    """The main observe-decide-act loop."""
-    prompt = ""
-
-    for _episode in range(config.max_turns):
-        if not tmux.is_session_alive(state.tmux_session):
-            _log.warning("tmux session died")
-            state.status = "failed"
-            break
-
-        _maybe_summarize(state, config, run_dir)
-
-        full_prompt = planner.build_prompt(
-            config.instruction,
-            prompt or "Shell is ready.",
-            state.summary,
-            state.qa_context,
-        )
-        state.total_prompt_chars += len(full_prompt)
-
-        try:
-            raw = planner.query_planner(
-                full_prompt,
-                timeout=config.planner_timeout,
-                retries=config.planner_retries,
-            )
-        except RuntimeError:
-            _log.warning("Planner query failed after retries")
-            error_step = StepRecord(
-                step_id=uuid.uuid4().hex,
-                timestamp=datetime.now(tz=UTC).isoformat(),
-                source="error",
-                observation=prompt,
-                error="Planner failed after retries",
-            )
-            trajectory.append_step(run_dir, error_step)
-            db.insert_step(conn, state.run_id, error_step, step_index=state.current_step)
-            _track_step(state, error_step)
-            prompt = "The planner failed to respond. Please try again."
-            continue
-
-        usage = planner.extract_usage(raw)
-        parsed = planner.parse_response(raw)
-
-        if parsed.error:
-            _handle_parse_error(state, parsed, run_dir, prompt, conn=conn, usage=usage)
-            prompt = (
-                f"Previous response had parsing errors:\n{parsed.error}\n\n"
-                "Please fix these issues and respond with valid JSON."
-            )
-            continue
-
-        if parsed.task_complete:
-            done = _handle_completion(state, parsed, run_dir, prompt, conn=conn, usage=usage)
-            if done:
-                break
-            visible = tmux.capture_visible(state.tmux_session)
-            prompt = (
-                f"{visible}\n\n"
-                "IMPORTANT: You previously indicated task_complete=true. "
-                "If the task is truly done, respond with task_complete=true again to confirm. "
-                "If you need to do more work, set task_complete=false and provide commands."
-            )
-            continue
-
-        state.pending_completion = False
-        _execute_commands(state, config, parsed)
-
-        output, state.previous_buffer = tmux.get_incremental_output(
+def _run_turns(
+    state: State,
+    config: Config,
+    run_dir: Path,
+    ports: Ports,
+    effects: DecideEffects,
+    holder: _StateHolder,
+) -> State:
+    """Drive up to `state.max_turns` top-level ticks."""
+    for _ in range(state.max_turns):
+        holder.state = state
+        session_alive = ports.container.is_session_alive(
+            state.container_id,
             state.tmux_session,
-            state.previous_buffer,
         )
-        output = tmux.truncate_output(output, max_bytes=config.max_output_bytes)
-
-        _log_step(state, output, parsed, run_dir, conn=conn, usage=usage)
-        prompt = output
-
-    else:
-        state.status = "failed"
-        _log.warning("Max turns reached")
-
-
-def _handle_parse_error(
-    state: RunState,
-    parsed: ParseResult,
-    run_dir: Path,
-    observation: str,
-    *,
-    conn: sqlite3.Connection | None = None,
-    usage: PlannerUsage | None = None,
-) -> None:
-    """Log a parse error step."""
-    _log.warning("Parse error", extra={"error": parsed.error})
-    step = StepRecord(
-        step_id=uuid.uuid4().hex,
-        timestamp=datetime.now(tz=UTC).isoformat(),
-        source="error",
-        observation=observation,
-        error=parsed.error,
-    )
-    trajectory.append_step(run_dir, step)
-    if conn:
-        u = usage or PlannerUsage()
-        db.insert_step(
-            conn,
-            state.run_id,
-            step,
-            step_index=state.current_step,
-            input_tokens=u.input_tokens,
-            output_tokens=u.output_tokens,
-            cost_usd=u.cost_usd,
-            planner_duration_ms=u.duration_ms,
-        )
-    _track_step(state, step)
-
-
-def _handle_completion(
-    state: RunState,
-    parsed: ParseResult,
-    run_dir: Path,
-    observation: str,
-    *,
-    conn: sqlite3.Connection | None = None,
-    usage: PlannerUsage | None = None,
-) -> bool:
-    """Handle task_complete. Returns True if confirmed (break loop)."""
-    if state.pending_completion:
-        state.status = "succeeded"
-        _log.info("Task completed (confirmed)")
-        step = StepRecord(
-            step_id=uuid.uuid4().hex,
-            timestamp=datetime.now(tz=UTC).isoformat(),
-            source="agent",
-            observation=observation,
-            analysis=parsed.analysis,
-            plan=parsed.plan,
-            task_complete=True,
-        )
-        trajectory.append_step(run_dir, step)
-        if conn:
-            u = usage or PlannerUsage()
-            db.insert_step(
-                conn,
-                state.run_id,
-                step,
-                step_index=state.current_step,
-                input_tokens=u.input_tokens,
-                output_tokens=u.output_tokens,
-                cost_usd=u.cost_usd,
-                planner_duration_ms=u.duration_ms,
+        polled = ports.summarize.poll()
+        event: Event = (
+            _event_from_poll(polled)
+            if polled is not None
+            else LoopTick(
+                summarize_ready=ports.summarize.idle() and session_alive,
+                session_alive=session_alive,
             )
-        _track_step(state, step)
-        return True
-
-    state.pending_completion = True
-    _log.info("Task completion pending confirmation")
-    return False
-
-
-def _execute_commands(state: RunState, config: Config, parsed: ParseResult) -> None:
-    """Execute parsed commands against tmux."""
-    if not parsed.commands:
-        return
-    for cmd in parsed.commands:
-        tmux.send_keys(state.tmux_session, cmd.keystrokes)
-        wait = min(cmd.duration, config.max_duration)
-        time.sleep(wait)
-    time.sleep(config.min_delay)
+        )
+        state = _drive(state, event, config, run_dir, ports, effects, holder)
+        if state.status != "active":
+            return state
+    _log.warning("Max turns reached")
+    return with_status(state, "failed")
 
 
-def _maybe_summarize(state: RunState, config: Config, run_dir: Path) -> None:
-    """Check and run summarization if needed."""
-    if not summarizer.should_summarize(state.total_prompt_chars, config.summarization_threshold):
-        return
+def _drive(
+    state: State,
+    initial_event: Event,
+    config: Config,
+    run_dir: Path,
+    ports: Ports,
+    effects: DecideEffects,
+    holder: _StateHolder,
+) -> State:
+    """Decide → apply → decide chain. Runs until the command queue is empty.
 
-    _log.info("Triggering summarization", extra={"prompt_chars": state.total_prompt_chars})
-    visible = tmux.capture_visible(state.tmux_session)
-    recent_text = summarizer.format_steps_text(state.recent_steps)
-    if not recent_text:
-        recent_text = f"[{state.current_step} steps completed]"
-    full_text = trajectory.read_trajectory_text(run_dir)
-    if not full_text:
-        full_text = recent_text
+    Commands emitted by a decide call that transitions the run out of
+    `"active"` (e.g., the terminal `LogStepCmd` from confirmed
+    completion) are still applied *and* re-decided so state bookkeeping
+    (step counter, etc.) catches the last event. Only the *new* commands
+    produced by that terminal re-decide are dropped, since further
+    Observe/Query would spin forever.
+    """
+    transition = decide(state, initial_event, config, effects)
+    state = transition.state
+    holder.state = state
+    pending = deque(transition.commands)
+
+    while pending:
+        was_active = state.status == "active"
+        cmd = pending.popleft()
+        event = apply(cmd, ports, state=state, run_dir=run_dir, config=config)
+        sub = decide(state, event, config, effects)
+        state = sub.state
+        holder.state = state
+        # Always re-decide so terminal events (e.g. StepLogged from the
+        # final LogStepCmd emitted by confirmed completion) bump the step
+        # counter and apply other bookkeeping (see BUG-41). The gate
+        # below is about whether *new* commands should queue: if the run
+        # was already terminal when we applied this command, further
+        # Observe/Query would spin forever — drop them. If the run was
+        # active and just transitioned (its own decide emitted terminal
+        # cleanup commands), we must keep them so the final step lands.
+        if was_active:
+            pending.extend(sub.commands)
+    return state
+
+
+def _event_from_poll(
+    polled: Result[SummarizationComplete, SummarizationError],
+) -> Event:
+    """Map a worker.poll() result to the corresponding Event variant."""
+    if isinstance(polled, Ok):
+        return SummarizationDone(
+            summary=polled.value.summary,
+            qa_context=polled.value.qa_context,
+        )
+    return SummarizationFailedEvent(error=polled.error)
+
+
+def _provision_failure(
+    state: State,
+    conn: sqlite3.Connection,
+    run_dir: Path,
+    reason: str,
+) -> State:
+    """Short-circuit tear-down when container/session provisioning fails."""
+    _log.error("Provisioning failed", extra={"reason": reason})
+    state = with_status(state, "failed")
+    finished = datetime.now(tz=UTC).isoformat()
+    trajectory.write_run_metadata(
+        run_dir,
+        state,
+        finished_at=finished,
+        termination_reason="container_provision_failed",
+    )
+    db.update_run(
+        conn,
+        state,
+        finished_at=finished,
+        termination_reason="container_provision_failed",
+    )
+    conn.close()
+    if state.container_id:
+        container.destroy_container(state.container_id)
+    _log.info("Run finished", extra={"status": state.status, "steps": state.current_step})
+    return state
+
+
+def _final_artifact_snapshot(
+    state: State,
+    config: Config,
+    run_dir: Path,
+    ports: Ports,
+) -> State:
+    """Refresh artifacts one last time before teardown, best-effort."""
+    if state.current_step == 0:
+        return state
+    if not ports.container.is_session_alive(state.container_id, state.tmux_session):
+        return state
 
     def query_fn(prompt: str) -> str:
-        raw = planner.query_planner(prompt, timeout=config.planner_timeout, retries=1)
+        result = ports.planner.query(
+            prompt,
+            timeout=config.planner_timeout,
+            retries=1,
+            claude_session_id=state.claude_session_id,
+            first_call=False,
+            resume_parent=None,
+            fork_session=False,
+        )
+        if isinstance(result, Err):
+            raise result.error
+        try:
+            envelope = json.loads(result.value)
+        except (json.JSONDecodeError, TypeError):
+            return result.value
+        if isinstance(envelope, dict):
+            return str(envelope.get("result", ""))
+        return ""
+
+    try:
+        ports.artifacts.refresh(state, run_dir, query_fn=query_fn)
+    except TermiclawError:
+        _log.exception("Final artifact snapshot failed")
+    return state
+
+
+def _build_summarization_query_fn(
+    holder: _StateHolder,
+    config: Config,
+) -> Callable[[str], str]:
+    """Build the `query_fn` the background summarizer uses for its 3 subagents."""
+    from termiclaw import planner  # noqa: PLC0415 — avoid circular import
+
+    def query_fn(prompt: str) -> str:
+        result = planner.query_planner(
+            prompt,
+            timeout=config.planner_timeout,
+            retries=1,
+            claude_session_id=holder.state.claude_session_id,
+            first_call=False,
+        )
+        if isinstance(result, Err):
+            raise result.error
+        raw = result.value
         try:
             envelope = json.loads(raw)
-            return str(envelope.get("result", raw))
         except (json.JSONDecodeError, TypeError):
             return raw
+        if isinstance(envelope, dict):
+            value = envelope.get("result", raw)
+            return str(value) if value is not None else raw
+        return raw
 
-    summary, qa = summarizer.summarize_with_fallback(
-        state.instruction,
-        recent_text,
-        full_text,
-        visible,
-        query_fn,
-    )
-    state.summary = summary
-    state.qa_context = qa
-    state.total_prompt_chars = 0
-    state.recent_steps.clear()
-
-    step = StepRecord(
-        step_id=uuid.uuid4().hex,
-        timestamp=datetime.now(tz=UTC).isoformat(),
-        source="system",
-        observation="Summarization checkpoint created",
-        is_copied_context=True,
-    )
-    trajectory.append_step(run_dir, step)
-    _track_step(state, step)
-
-
-def _log_step(
-    state: RunState,
-    observation: str,
-    parsed: ParseResult,
-    run_dir: Path,
-    *,
-    conn: sqlite3.Connection | None = None,
-    usage: PlannerUsage | None = None,
-) -> None:
-    """Log a normal step."""
-    step = StepRecord(
-        step_id=uuid.uuid4().hex,
-        timestamp=datetime.now(tz=UTC).isoformat(),
-        source="agent",
-        observation=observation,
-        analysis=parsed.analysis,
-        plan=parsed.plan,
-        commands=parsed.commands,
-        metrics=(("prompt_chars", state.total_prompt_chars),),
-    )
-    trajectory.append_step(run_dir, step)
-    if conn:
-        u = usage or PlannerUsage()
-        db.insert_step(
-            conn,
-            state.run_id,
-            step,
-            step_index=state.current_step,
-            input_tokens=u.input_tokens,
-            output_tokens=u.output_tokens,
-            cost_usd=u.cost_usd,
-            planner_duration_ms=u.duration_ms,
-        )
-    _track_step(state, step)
-    _log.info("Step completed", extra={"step": state.current_step})
-
-
-def _track_step(state: RunState, step: StepRecord) -> None:
-    """Track step in recent history and increment counter."""
-    state.recent_steps.append(step)
-    state.recent_steps = state.recent_steps[-_MAX_RECENT_STEPS:]
-    state.current_step += 1
-
-
-def _termination_reason(state: RunState) -> str:
-    """Derive termination reason from run state."""
-    if state.status == "succeeded":
-        return "task_complete_confirmed"
-    if state.status == "cancelled":
-        return "keyboard_interrupt"
-    return "max_turns_or_failure"
+    return query_fn

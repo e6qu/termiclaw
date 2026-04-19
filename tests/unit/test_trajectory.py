@@ -1,11 +1,13 @@
 """Tests for termiclaw.trajectory."""
 
 import json
+from dataclasses import replace
 
-from termiclaw.models import ParsedCommand, RunState, StepRecord
+from termiclaw.models import ParsedCommand, StepRecord
+from termiclaw.state import State
 from termiclaw.trajectory import (
     _format_duration,
-    _sum_prompt_chars,
+    _sum_prompt_tokens,
     append_step,
     ensure_run_dir,
     list_runs,
@@ -91,7 +93,7 @@ def test_append_step_task_complete(tmp_path):
 
 
 def test_write_run_metadata(tmp_path):
-    state = RunState(
+    state = State(
         run_id="abc",
         instruction="fix bug",
         tmux_session="termiclaw-abc",
@@ -110,7 +112,7 @@ def test_write_run_metadata(tmp_path):
 
 
 def test_write_run_metadata_overwrite(tmp_path):
-    state = RunState(
+    state = State(
         run_id="abc",
         instruction="x",
         tmux_session="t",
@@ -118,7 +120,7 @@ def test_write_run_metadata_overwrite(tmp_path):
         status="active",
     )
     write_run_metadata(tmp_path, state)
-    state.status = "succeeded"
+    state = replace(state, status="succeeded")
     write_run_metadata(tmp_path, state, finished_at="done")
     data = json.loads((tmp_path / "run.json").read_text())
     assert data["status"] == "succeeded"
@@ -131,12 +133,12 @@ def test_step_metrics_serialized(tmp_path):
         timestamp="t",
         source="agent",
         observation="out",
-        metrics=(("prompt_chars", 1500), ("duration_ms", 3200)),
+        metrics=(("prompt_tokens", 1500), ("duration_ms", 3200)),
     )
     append_step(tmp_path, step)
     line = (tmp_path / "trajectory.jsonl").read_text().strip()
     data = json.loads(line)
-    assert data["metrics"]["prompt_chars"] == 1500
+    assert data["metrics"]["prompt_tokens"] == 1500
     assert data["metrics"]["duration_ms"] == 3200
 
 
@@ -204,13 +206,13 @@ def test_list_runs_with_data(tmp_path):
     assert results[0].run_id in ("aaa", "bbb")
 
 
-def test_sum_prompt_chars(tmp_path):
+def test_sum_prompt_tokens(tmp_path):
     step = StepRecord(
         step_id="s1",
         timestamp="t",
         source="agent",
         observation="out",
-        metrics=(("prompt_chars", 1500),),
+        metrics=(("prompt_tokens", 1500),),
     )
     append_step(tmp_path, step)
     step2 = StepRecord(
@@ -218,10 +220,10 @@ def test_sum_prompt_chars(tmp_path):
         timestamp="t",
         source="agent",
         observation="out",
-        metrics=(("prompt_chars", 2500),),
+        metrics=(("prompt_tokens", 2500),),
     )
     append_step(tmp_path, step2)
-    assert _sum_prompt_chars(tmp_path) == 4000
+    assert _sum_prompt_tokens(tmp_path) == 4000
 
 
 def test_format_duration_seconds():

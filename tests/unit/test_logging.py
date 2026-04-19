@@ -38,12 +38,12 @@ def test_json_formatter_extra_fields():
         args=(),
         exc_info=None,
     )
-    record.step = 3  # type: ignore[attr-defined]
-    record.prompt_chars = 15000  # type: ignore[attr-defined]
+    setattr(record, "step", 3)  # noqa: B010
+    setattr(record, "prompt_tokens", 15000)  # noqa: B010
     output = formatter.format(record)
     parsed = json.loads(output)
     assert parsed["step"] == 3
-    assert parsed["prompt_chars"] == 15000
+    assert parsed["prompt_tokens"] == 15000
 
 
 def test_json_formatter_single_line():
@@ -101,7 +101,6 @@ def test_setup_logging_adds_handler():
     setup_logging("test-run-id", level=logging.DEBUG)
     assert len(logger.handlers) == initial_count + 1 or len(logger.handlers) >= 1
     assert logger.level == logging.DEBUG
-    # Cleanup
     logger.handlers.clear()
 
 
@@ -112,7 +111,6 @@ def test_setup_logging_idempotent():
     count = len(logger.handlers)
     setup_logging("run2")
     assert len(logger.handlers) == count
-    # Cleanup
     logger.handlers.clear()
 
 
@@ -144,7 +142,6 @@ def test_json_formatter_includes_run_id():
     output = formatter.format(record)
     parsed = json.loads(output)
     assert parsed["run_id"] == "test-run-123"
-    # Cleanup
     logging.getLogger("termiclaw").handlers.clear()
 
 
