@@ -114,6 +114,23 @@ def test_run_task_file_not_found():
         _run(args)
 
 
+def test_run_task_file_non_utf8_clean_exit(tmp_path, capsys):
+    """BUG-44: `--task <file>` with non-UTF-8 content exits cleanly, no traceback."""
+    bad = tmp_path / "bad.txt"
+    bad.write_bytes(b"hello\xc3\x28 world")  # invalid UTF-8 continuation
+    args = _run_args(task=str(bad))
+    with (
+        patch("termiclaw.cli._check_docker"),
+        patch("termiclaw.cli._check_claude"),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        _run(args)
+    assert exc_info.value.code == 1
+    err = capsys.readouterr().err
+    assert "not readable as UTF-8" in err
+    assert str(bad) in err
+
+
 def test_run_no_instruction():
     args = _run_args()
     with (

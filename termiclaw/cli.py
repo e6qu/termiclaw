@@ -184,7 +184,13 @@ def _run(args: argparse.Namespace) -> None:
         if not task_path.exists():
             sys.stderr.write(f"Error: task file not found: {args.task}\n")
             sys.exit(1)
-        instruction = task_path.read_text().strip()
+        try:
+            instruction = task_path.read_text(encoding="utf-8").strip()
+        except UnicodeDecodeError as e:
+            sys.stderr.write(
+                f"Error: task file not readable as UTF-8 ({e.reason}): {args.task}\n",
+            )
+            sys.exit(1)
     if not instruction:
         sys.stderr.write("Error: provide an instruction or --task file\n")
         sys.exit(1)
